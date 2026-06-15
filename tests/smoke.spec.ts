@@ -7,6 +7,7 @@ const APP_CONFIG = {
   name: 'hackathon-health',
   plugins: [
     'lakebase',
+    'genie',
   ],
 } as const;
 
@@ -25,12 +26,12 @@ const PLUGIN_PAGES: Record<string, PluginPage> = {
   lakebase: {
     navLabel: 'Health indicators',
     path: '/',
-    expectedTexts: ['Care gap confidence planner', 'Highest-risk gaps in care', 'District results', 'Facility search'],
+    expectedTexts: ['Care gap confidence planner', 'Highest-risk gaps in care', 'Geographic heat map'],
   },
   genie: {
     navLabel: 'Genie',
-    path: '/genie',
-    expectedTexts: ['Ask questions about your data using Databricks AI/BI Genie'],
+    path: '/',
+    expectedTexts: ['Ask Genie', 'Databricks AI/BI Genie'],
   },
 };
 
@@ -54,13 +55,17 @@ test('smoke test - app loads and displays home page', async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByText('Lakebase synced datasets')).toBeVisible();
   await expect(page.getByText('Highest-risk gaps in care')).toBeVisible();
-  await expect(page.getByText('District results')).toBeVisible();
-  await expect(page.getByText('Facility search')).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Health indicators' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Facilities' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Genie' })).toBeVisible();
 });
 
 for (const [name, plugin] of enabledPages) {
   test(`smoke test - ${name} page loads`, async ({ page }) => {
     await page.goto(plugin.path);
+    if (plugin.navLabel !== 'Health indicators') {
+      await page.getByRole('tab', { name: plugin.navLabel }).click();
+    }
 
     for (const text of plugin.expectedTexts) {
       await expect(page.getByText(text)).toBeVisible();

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertCircle,
+  Bot,
   Building2,
   CheckCircle2,
   Database,
@@ -19,7 +20,8 @@ import {
   Stethoscope,
   Target,
 } from 'lucide-react';
-import { Button, Card, CardContent, CardHeader, CardTitle, Input, Skeleton } from '@databricks/appkit-ui/react';
+import { Button, Card, CardContent, CardHeader, CardTitle, GenieChat, Input, Skeleton } from '@databricks/appkit-ui/react';
+import { INDIA_BOUNDARY_PATHS, INDIA_MAP_BOUNDS } from './lib/india-boundary';
 
 interface Overview {
   district_count: number;
@@ -114,6 +116,8 @@ interface GapRegion {
   branch_office_count: number;
   delivery_office_count: number;
   geocoded_pincode_count: number;
+  centroid_latitude: number | null;
+  centroid_longitude: number | null;
   nearest_hospital_km: number | null;
   need_score: number;
   facility_evidence_score: number;
@@ -135,8 +139,9 @@ const sortOptions = [
   { value: 'births', label: 'Institutional births' },
 ];
 
-type ActiveTab = 'gaps' | 'health' | 'facilities';
+type ActiveTab = 'gaps' | 'health' | 'facilities' | 'genie';
 type ScoreMetricLabel = 'Gap score' | 'Need' | 'Supply adequacy' | 'Access pressure' | 'Confidence';
+type MapMetric = 'gap' | 'need';
 
 const metricDescriptions: Record<ScoreMetricLabel, string> = {
   'Gap score':
@@ -170,6 +175,8 @@ const formatKm = (value: number | string | null | undefined) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? `${numeric.toFixed(1)} km` : 'n/a';
 };
+
+const gapCardId = (key: string) => `gap-card-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
 const normalizeText = (value: string | null | undefined, fallback = 'n/a') => {
   if (!value || value === 'null') return fallback;
@@ -234,6 +241,8 @@ export default function App() {
   const [gapQuery, setGapQuery] = useState('');
   const [gapState, setGapState] = useState('');
   const [minConfidence, setMinConfidence] = useState('0');
+  const [mapMetric, setMapMetric] = useState<MapMetric>('gap');
+  const [selectedGapKey, setSelectedGapKey] = useState<string | null>(null);
   const [gapLoading, setGapLoading] = useState(true);
   const [gapError, setGapError] = useState<string | null>(null);
 
@@ -375,6 +384,24 @@ export default function App() {
     };
   }, [gaps]);
 
+  const selectedGap = useMemo(
+    () => gaps.find((gap) => gap.geography_key === selectedGapKey) ?? null,
+    [gaps, selectedGapKey],
+  );
+
+  useEffect(() => {
+    if (selectedGapKey && !gaps.some((gap) => gap.geography_key === selectedGapKey)) {
+      setSelectedGapKey(null);
+    }
+  }, [gaps, selectedGapKey]);
+
+  const selectGapFromMap = (gap: GapRegion) => {
+    setSelectedGapKey(gap.geography_key);
+    window.setTimeout(() => {
+      document.getElementById(gapCardId(gap.geography_key))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 50);
+  };
+
   return (
     <main className="min-h-screen bg-[#F9F7F4] text-[#0B2026]">
       <section className="border-b border-[#0B2026]/10 bg-[#EEEDE9]">
@@ -448,7 +475,7 @@ export default function App() {
       <section className="border-b border-[#0B2026]/10 bg-[#F9F7F4]">
         <div className="mx-auto max-w-7xl px-5 py-4 md:px-8">
           <div
-            className="grid gap-2 rounded-md border border-[#0B2026]/10 bg-white p-1 shadow-sm sm:grid-cols-3"
+            className="grid gap-2 rounded-md border border-[#0B2026]/10 bg-white p-1 shadow-sm sm:grid-cols-2 lg:grid-cols-4"
             role="tablist"
             aria-label="Planning sections"
           >
@@ -469,6 +496,12 @@ export default function App() {
               icon={<Stethoscope className="h-4 w-4" />}
               label="Facilities"
               onClick={() => setActiveTab('facilities')}
+            />
+            <TabButton
+              active={activeTab === 'genie'}
+              icon={<Bot className="h-4 w-4" />}
+              label="Genie"
+              onClick={() => setActiveTab('genie')}
             />
           </div>
         </div>
@@ -545,6 +578,7 @@ export default function App() {
                     setGapState('');
                     setGapQuery('');
                     setMinConfidence('0');
+                    setSelectedGapKey(null);
                   }}
                 >
                   Reset gap controls
@@ -576,24 +610,55 @@ export default function App() {
                   Ranked by high health burden, low trust-weighted facility evidence, and filtered by confidence.
                 </p>
               </div>
-              <div className="rounded-md border border-[#0B2026]/10 bg-white px-4 py-3 text-sm shadow-sm">
-                <div className="text-xs text-[#0B2026]/55">Current top gap</div>
-                <div className="font-semibold">
-                  {gapLoading ? 'Loading' : gapSummary.topGap ? gapSummary.topGap.geography_name : 'No match'}
+              <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[420px]">
+                <div className="rounded-md border border-[#0B2026]/10 bg-white px-4 py-3 text-sm shadow-sm">
+                  <div className="text-xs text-[#0B2026]/55">Current top gap</div>
+                  <div className="font-semibold">
+                    {gapLoading ? 'Loading' : gapSummary.topGap ? gapSummary.topGap.geography_name : 'No match'}
+                  </div>
+                </div>
+                <div className="rounded-md border border-[#0B2026]/10 bg-white px-4 py-3 text-sm shadow-sm">
+                  <div className="text-xs text-[#0B2026]/55">Selected region</div>
+                  <div className="font-semibold">{selectedGap ? selectedGap.geography_name : 'Click a heat point'}</div>
                 </div>
               </div>
             </div>
 
             {gapLoading ? (
               <div className="grid gap-3">
-                {Array.from({ length: 6 }, (_, index) => (
+                <Skeleton className="h-[520px] rounded-md" />
+                {Array.from({ length: 4 }, (_, index) => (
                   <Skeleton key={index} className="h-44 rounded-md" />
                 ))}
               </div>
             ) : (
-              <div className="grid gap-3">
+              <div className="grid gap-4">
+                <Card className="rounded-md border-[#0B2026]/10 bg-white shadow-sm">
+                  <CardContent className="space-y-4 p-5">
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold">Geographic heat map</h3>
+                        <p className="text-sm text-[#0B2026]/65">
+                          Heat bubbles use pincode centroids for each {gapLevel}; click a region to open its details.
+                        </p>
+                      </div>
+                      <div className="inline-grid rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-1 text-sm sm:grid-cols-2">
+                        <MapMetricButton active={mapMetric === 'gap'} label="Gaps" onClick={() => setMapMetric('gap')} />
+                        <MapMetricButton active={mapMetric === 'need'} label="Needs" onClick={() => setMapMetric('need')} />
+                      </div>
+                    </div>
+
+                    <GapHeatMap
+                      gaps={gaps}
+                      metric={mapMetric}
+                      selectedKey={selectedGapKey}
+                      onSelect={selectGapFromMap}
+                    />
+                  </CardContent>
+                </Card>
+
                 {gaps.map((gap) => (
-                  <GapCard key={gap.geography_key} gap={gap} />
+                  <GapCard key={gap.geography_key} gap={gap} selected={gap.geography_key === selectedGapKey} />
                 ))}
                 {gaps.length === 0 && (
                   <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
@@ -839,6 +904,28 @@ export default function App() {
           </div>
         </section>
       )}
+
+      {activeTab === 'genie' && (
+        <section className="border-t border-[#0B2026]/10 bg-white">
+          <div className="mx-auto max-w-7xl px-5 py-6 md:px-8">
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Ask Genie</h2>
+                <p className="text-sm text-[#0B2026]/65">
+                  Ask questions across the health indicators, facility directory, and access evidence tables.
+                </p>
+              </div>
+              <div className="inline-flex w-fit items-center gap-2 rounded-md bg-[#0B2026] px-3 py-2 text-sm text-white">
+                <Bot className="h-4 w-4 text-[#FF3621]" />
+                Databricks AI/BI Genie
+              </div>
+            </div>
+            <div className="h-[720px] overflow-hidden rounded-md border border-[#0B2026]/10 bg-white shadow-sm">
+              <GenieChat alias="default" />
+            </div>
+          </div>
+        </section>
+      )}
     </main>
   );
 }
@@ -904,9 +991,181 @@ function MetricCard({
   );
 }
 
-function GapCard({ gap }: { gap: GapRegion }) {
+function MapMetricButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
   return (
-    <Card className="rounded-md border-[#0B2026]/10 bg-white shadow-sm">
+    <button
+      type="button"
+      className={`h-9 rounded px-4 font-semibold transition-colors ${
+        active ? 'bg-[#0B2026] text-white shadow-sm' : 'text-[#0B2026]/65 hover:bg-white hover:text-[#0B2026]'
+      }`}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+function GapHeatMap({
+  gaps,
+  metric,
+  selectedKey,
+  onSelect,
+}: {
+  gaps: GapRegion[];
+  metric: MapMetric;
+  selectedKey: string | null;
+  onSelect: (gap: GapRegion) => void;
+}) {
+  const plotted = gaps
+    .map((gap) => {
+      const latitude = Number(gap.centroid_latitude);
+      const longitude = Number(gap.centroid_longitude);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+      const value = metric === 'gap' ? gap.gap_score : gap.need_score;
+      return {
+        gap,
+        value,
+        x: INDIA_MAP_BOUNDS.offsetX + (longitude - INDIA_MAP_BOUNDS.minLon) * INDIA_MAP_BOUNDS.scale,
+        y: INDIA_MAP_BOUNDS.offsetY + (INDIA_MAP_BOUNDS.maxLat - latitude) * INDIA_MAP_BOUNDS.scale,
+      };
+    })
+    .filter((point): point is { gap: GapRegion; value: number; x: number; y: number } => Boolean(point))
+    .filter((point) => point.x >= -4 && point.x <= 104 && point.y >= -4 && point.y <= 104);
+
+  const topRegions = [...plotted].sort((a, b) => b.value - a.value).slice(0, 5);
+  const legendLabel = metric === 'gap' ? 'Gap score' : 'Need score';
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+      <div className="relative min-h-[420px] overflow-hidden rounded-md border border-[#0B2026]/10 bg-[#E8F0ED]">
+        <svg className="h-full min-h-[420px] w-full" viewBox="0 0 100 100" role="img" aria-label={`${legendLabel} heat map`}>
+          <defs>
+            <linearGradient id="map-water" x1="0" x2="1" y1="0" y2="1">
+              <stop offset="0%" stopColor="#F8FAF7" />
+              <stop offset="100%" stopColor="#D9E8E5" />
+            </linearGradient>
+            <radialGradient id="heat-red">
+              <stop offset="0%" stopColor="#FF3621" stopOpacity="0.88" />
+              <stop offset="70%" stopColor="#FF8A00" stopOpacity="0.36" />
+              <stop offset="100%" stopColor="#FF8A00" stopOpacity="0" />
+            </radialGradient>
+            <radialGradient id="heat-blue">
+              <stop offset="0%" stopColor="#0B6E99" stopOpacity="0.82" />
+              <stop offset="70%" stopColor="#24A3B5" stopOpacity="0.34" />
+              <stop offset="100%" stopColor="#24A3B5" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+
+          <rect width="100" height="100" fill="url(#map-water)" />
+          {INDIA_BOUNDARY_PATHS.map((path) => (
+            <path
+              key={path}
+              d={path}
+              fill="#F7F5EF"
+              stroke="#0B2026"
+              strokeOpacity="0.26"
+              strokeWidth="0.32"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+
+          {plotted.map(({ gap, value, x, y }) => {
+            const radius = 3.5 + Math.max(0, Math.min(100, value)) * 0.08;
+            const selected = selectedKey === gap.geography_key;
+
+            return (
+              <g key={gap.geography_key}>
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={radius * 1.9}
+                  fill={metric === 'gap' ? 'url(#heat-red)' : 'url(#heat-blue)'}
+                  className="pointer-events-none"
+                />
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={selected ? radius * 0.65 : radius * 0.48}
+                  fill={metric === 'gap' ? '#FF3621' : '#0B6E99'}
+                  fillOpacity={selected ? 1 : 0.82}
+                  stroke={selected ? '#0B2026' : '#ffffff'}
+                  strokeWidth={selected ? 0.95 : 0.45}
+                  className="cursor-pointer transition-opacity hover:opacity-90"
+                  data-map-point
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${gap.geography_name}, ${legendLabel} ${formatScore(value)}`}
+                  onClick={() => onSelect(gap)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') onSelect(gap);
+                  }}
+                >
+                  <title>{`${gap.geography_name}, ${gap.state_name}: ${legendLabel} ${formatScore(value)}`}</title>
+                </circle>
+              </g>
+            );
+          })}
+        </svg>
+
+        <div className="absolute bottom-3 left-3 rounded-md border border-[#0B2026]/10 bg-white/95 px-3 py-2 text-xs shadow-sm">
+          <div className="mb-1 font-semibold text-[#0B2026]">{legendLabel}</div>
+          <div className="flex items-center gap-2">
+            <span>Low</span>
+            <span
+              className={`block h-2 w-28 rounded-full ${
+                metric === 'gap'
+                  ? 'bg-gradient-to-r from-[#FFE2D7] via-[#FF8A00] to-[#FF3621]'
+                  : 'bg-gradient-to-r from-[#DDF5EF] via-[#24A3B5] to-[#0B6E99]'
+              }`}
+            />
+            <span>High</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-4">
+        <div className="mb-3 text-sm font-semibold">Top mapped {metric === 'gap' ? 'gaps' : 'needs'}</div>
+        <div className="space-y-2">
+          {topRegions.map(({ gap, value }, index) => (
+            <button
+              type="button"
+              key={gap.geography_key}
+              className={`w-full rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+                selectedKey === gap.geography_key
+                  ? 'border-[#0B2026] bg-white'
+                  : 'border-[#0B2026]/10 bg-white/70 hover:border-[#0B2026]/25 hover:bg-white'
+              }`}
+              onClick={() => onSelect(gap)}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">{index + 1}. {gap.geography_name}</span>
+                <span>{formatScore(value)}</span>
+              </div>
+              <div className="mt-1 text-xs text-[#0B2026]/58">
+                {gap.state_name} · {gap.evidence_label}
+              </div>
+            </button>
+          ))}
+          {plotted.length === 0 && (
+            <div className="rounded-md border border-[#0B2026]/10 bg-white p-4 text-sm text-[#0B2026]/65">
+              No centroid coordinates are available for the current filters.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GapCard({ gap, selected = false }: { gap: GapRegion; selected?: boolean }) {
+  return (
+    <Card
+      id={gapCardId(gap.geography_key)}
+      className={`rounded-md bg-white shadow-sm ${
+        selected ? 'border-[#0B2026] ring-2 ring-[#FF3621]/35' : 'border-[#0B2026]/10'
+      }`}
+    >
       <CardContent className="p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 space-y-3 lg:flex-1">

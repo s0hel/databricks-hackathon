@@ -41,9 +41,9 @@ const buildHealthGeo = (level: 'state' | 'district') => {
   if (level === 'state') {
     return `
       SELECT
-        TRIM(state_ut) AS geography_key,
-        TRIM(state_ut) AS geography_name,
-        TRIM(state_ut) AS state_name,
+        MIN(TRIM(state_ut)) AS geography_key,
+        MIN(TRIM(state_ut)) AS geography_name,
+        MIN(TRIM(state_ut)) AS state_name,
         COUNT(*)::int AS district_count,
         SUM(COALESCE(${numericColumn('households_surveyed')}, 0))::float AS households_surveyed,
         SUM(COALESCE(${numericColumn('women_15_49_interviewed')}, 0))::float AS women_interviewed,
@@ -54,7 +54,7 @@ const buildHealthGeo = (level: 'state' | 'district') => {
         AVG(${numericColumn('child_u5_who_are_stunted_height_for_age_18_pct')})::float AS stunting_pct,
         AVG(${numericColumn('w15_plus_with_high_bp_sys_gte_140_mmhg_and_or_dia_gte_90_mm_pct')})::float AS high_bp_women_pct
       FROM public.health_indicators
-      GROUP BY TRIM(state_ut)
+      GROUP BY ${normalizedGeo('state_ut')}
     `;
   }
 
@@ -82,8 +82,8 @@ const buildFacilityGeo = (level: 'state' | 'district') => {
 
   return `
     SELECT
-      ${geographyName} AS geography_name,
-      TRIM(NULLIF(address_state_or_region, 'null')) AS state_name,
+      MIN(${geographyName}) AS geography_name,
+      MIN(TRIM(NULLIF(address_state_or_region, 'null'))) AS state_name,
       COUNT(*)::float AS facility_count,
       COUNT(*) FILTER (WHERE NULLIF(facility_type_id, 'null') = 'hospital')::float AS hospital_count,
       COUNT(*) FILTER (WHERE NULLIF(facility_type_id, 'null') = 'clinic')::float AS clinic_count,
@@ -103,7 +103,9 @@ const buildFacilityGeo = (level: 'state' | 'district') => {
       )::float AS described_count
     FROM public.facilities
     WHERE ${geographyName} IS NOT NULL
-    GROUP BY 1, 2
+    GROUP BY ${normalizedGeo(geographyName)}${
+      level === 'district' ? `, ${normalizedGeo(`TRIM(NULLIF(address_state_or_region, 'null'))`)}` : ''
+    }
   `;
 };
 
@@ -112,8 +114,8 @@ const buildPincodeGeo = (level: 'state' | 'district') => {
 
   return `
     SELECT
-      ${geographyName} AS geography_name,
-      TRIM(NULLIF(statename, 'null')) AS state_name,
+      MIN(${geographyName}) AS geography_name,
+      MIN(TRIM(NULLIF(statename, 'null'))) AS state_name,
       COUNT(DISTINCT pincode)::float AS pincode_count,
       COUNT(*)::float AS post_office_count,
       COUNT(*) FILTER (WHERE NULLIF(officetype, 'null') = 'BO')::float AS branch_office_count,
@@ -139,7 +141,9 @@ const buildPincodeGeo = (level: 'state' | 'district') => {
       ) raw_pincodes
     ) p
     WHERE ${geographyName} IS NOT NULL
-    GROUP BY 1, 2
+    GROUP BY ${normalizedGeo(geographyName)}${
+      level === 'district' ? `, ${normalizedGeo(`TRIM(NULLIF(statename, 'null'))`)}` : ''
+    }
   `;
 };
 
@@ -243,6 +247,8 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
                 COALESCE(p.branch_office_count, 0)::float AS branch_office_count,
                 COALESCE(p.delivery_office_count, 0)::float AS delivery_office_count,
                 COALESCE(p.geocoded_pincode_count, 0)::float AS geocoded_pincode_count,
+                p.centroid_latitude,
+                p.centroid_longitude,
                 p.nearest_hospital_km
               FROM health_geo h
               LEFT JOIN facility_geo f ON ${joinCondition}
@@ -335,6 +341,8 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
               ROUND(branch_office_count::numeric, 0)::int AS branch_office_count,
               ROUND(delivery_office_count::numeric, 0)::int AS delivery_office_count,
               ROUND(geocoded_pincode_count::numeric, 0)::int AS geocoded_pincode_count,
+              ROUND(centroid_latitude::numeric, 5)::float AS centroid_latitude,
+              ROUND(centroid_longitude::numeric, 5)::float AS centroid_longitude,
               ROUND(nearest_hospital_km::numeric, 1)::float AS nearest_hospital_km,
               ROUND(need_score::numeric, 1)::float AS need_score,
               ROUND(facility_evidence_score::numeric, 1)::float AS facility_evidence_score,
