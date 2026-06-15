@@ -18,15 +18,7 @@ import {
   Stethoscope,
   Target,
 } from 'lucide-react';
-import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Input,
-  Skeleton,
-} from '@databricks/appkit-ui/react';
+import { Button, Card, CardContent, CardHeader, CardTitle, Input, Skeleton } from '@databricks/appkit-ui/react';
 
 interface Overview {
   district_count: number;
@@ -134,6 +126,8 @@ const sortOptions = [
   { value: 'births', label: 'Institutional births' },
 ];
 
+type ActiveTab = 'gaps' | 'health' | 'facilities';
+
 const formatPct = (value: number | string | null | undefined) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : 'n/a';
@@ -173,7 +167,12 @@ const parseListPreview = (value: string | null | undefined) => {
     const parsed = JSON.parse(normalized) as unknown;
     if (Array.isArray(parsed)) {
       const values = parsed.filter((item): item is string => typeof item === 'string' && item.length > 0);
-      return values.slice(0, 3).map((item) => formatToken(item, item)).join(', ') || 'No specialty data';
+      return (
+        values
+          .slice(0, 3)
+          .map((item) => formatToken(item, item))
+          .join(', ') || 'No specialty data'
+      );
     }
   } catch {
     // Keep the original string when JSON parsing fails.
@@ -191,6 +190,7 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState<ActiveTab>('gaps');
   const [overview, setOverview] = useState<Overview | null>(null);
   const [states, setStates] = useState<StateOption[]>([]);
   const [districts, setDistricts] = useState<District[]>([]);
@@ -220,10 +220,7 @@ export default function App() {
   const [facilityError, setFacilityError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      fetchJson<Overview>('/api/health/overview'),
-      fetchJson<StateOption[]>('/api/health/states'),
-    ])
+    Promise.all([fetchJson<Overview>('/api/health/overview'), fetchJson<StateOption[]>('/api/health/states')])
       .then(([overviewData, stateData]) => {
         setOverview(overviewData);
         setStates(stateData);
@@ -360,11 +357,10 @@ export default function App() {
                 <Database className="h-4 w-4" />
                 Lakebase synced datasets
               </div>
-              <h1 className="text-3xl font-bold tracking-normal md:text-5xl">
-                Care gap confidence planner
-              </h1>
+              <h1 className="text-3xl font-bold tracking-normal md:text-5xl">Care gap confidence planner</h1>
               <p className="max-w-2xl text-base leading-7 text-[#0B2026]/70">
-                Trust-weighted facility evidence and district health burden combined by geography, so planners can separate likely gaps in care from places where the data is too thin to call.
+                Trust-weighted facility evidence and district health burden combined by geography, so planners can
+                separate likely gaps in care from places where the data is too thin to call.
               </p>
             </div>
             <div className="flex items-center gap-3 rounded-md border border-[#0B2026]/15 bg-white px-4 py-3 text-sm shadow-sm">
@@ -376,15 +372,9 @@ export default function App() {
             </div>
           </div>
 
-          {healthError && (
-            <InlineError message={healthError} />
-          )}
-          {facilityError && facilityError !== healthError && (
-            <InlineError message={facilityError} />
-          )}
-          {gapError && gapError !== healthError && gapError !== facilityError && (
-            <InlineError message={gapError} />
-          )}
+          {healthError && <InlineError message={healthError} />}
+          {facilityError && facilityError !== healthError && <InlineError message={facilityError} />}
+          {gapError && gapError !== healthError && gapError !== facilityError && <InlineError message={gapError} />}
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
             <MetricCard
@@ -427,295 +417,94 @@ export default function App() {
         </div>
       </section>
 
-      <section className="mx-auto grid max-w-7xl gap-5 px-5 py-6 md:px-8 lg:grid-cols-[320px_1fr]">
-        <aside className="space-y-4">
-          <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-base">Gap controls</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <label className="block space-y-2 text-sm font-medium">
-                <span>Geography</span>
-                <select
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={gapLevel}
-                  onChange={(event) => setGapLevel(event.target.value as 'state' | 'district')}
-                >
-                  <option value="state">State</option>
-                  <option value="district">District</option>
-                </select>
-              </label>
-
-              <label className="block space-y-2 text-sm font-medium">
-                <span>State or region</span>
-                <select
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={gapState}
-                  onChange={(event) => setGapState(event.target.value)}
-                >
-                  <option value="">All states</option>
-                  {states.map((option) => (
-                    <option key={option.state_ut} value={option.state_ut}>
-                      {option.state_ut}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block space-y-2 text-sm font-medium">
-                <span>Search geography</span>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#0B2026]/45" />
-                  <Input
-                    className="pl-9"
-                    value={gapQuery}
-                    onChange={(event) => setGapQuery(event.target.value)}
-                    placeholder="Search locations"
-                  />
-                </div>
-              </label>
-
-              <label className="block space-y-2 text-sm font-medium">
-                <span>Minimum confidence</span>
-                <select
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={minConfidence}
-                  onChange={(event) => setMinConfidence(event.target.value)}
-                >
-                  <option value="0">Any confidence</option>
-                  <option value="50">Medium or high</option>
-                  <option value="75">High confidence</option>
-                </select>
-              </label>
-
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={() => {
-                  setGapLevel('state');
-                  setGapState('');
-                  setGapQuery('');
-                  setMinConfidence('0');
-                }}
-              >
-                Reset gap controls
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
-            <CardContent className="space-y-3 pt-6 text-sm">
-              <div className="flex items-center gap-2 font-semibold">
-                <Layers className="h-4 w-4 text-[#FF3621]" />
-                Evidence model
-              </div>
-              <p className="leading-6 text-[#0B2026]/65">
-                Need combines anaemia, sanitation, insurance, institutional births, child stunting, and high blood pressure. Supply is down-weighted when facilities lack type, location, contact, or service details.
-              </p>
-            </CardContent>
-          </Card>
-        </aside>
-
-        <div className="space-y-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <h2 className="text-xl font-semibold">Highest-risk gaps in care</h2>
-              <p className="text-sm text-[#0B2026]/65">
-                Ranked by high health burden, low trust-weighted facility evidence, and filtered by confidence.
-              </p>
-            </div>
-            <div className="rounded-md border border-[#0B2026]/10 bg-white px-4 py-3 text-sm shadow-sm">
-              <div className="text-xs text-[#0B2026]/55">Current top gap</div>
-              <div className="font-semibold">
-                {gapLoading ? 'Loading' : gapSummary.topGap ? gapSummary.topGap.geography_name : 'No match'}
-              </div>
-            </div>
+      <section className="border-b border-[#0B2026]/10 bg-[#F9F7F4]">
+        <div className="mx-auto max-w-7xl px-5 py-4 md:px-8">
+          <div
+            className="grid gap-2 rounded-md border border-[#0B2026]/10 bg-white p-1 shadow-sm sm:grid-cols-3"
+            role="tablist"
+            aria-label="Planning sections"
+          >
+            <TabButton
+              active={activeTab === 'gaps'}
+              icon={<Target className="h-4 w-4" />}
+              label="Gaps"
+              onClick={() => setActiveTab('gaps')}
+            />
+            <TabButton
+              active={activeTab === 'health'}
+              icon={<Activity className="h-4 w-4" />}
+              label="Health indicators"
+              onClick={() => setActiveTab('health')}
+            />
+            <TabButton
+              active={activeTab === 'facilities'}
+              icon={<Stethoscope className="h-4 w-4" />}
+              label="Facilities"
+              onClick={() => setActiveTab('facilities')}
+            />
           </div>
-
-          {gapLoading ? (
-            <div className="grid gap-3">
-              {Array.from({ length: 6 }, (_, index) => (
-                <Skeleton key={index} className="h-44 rounded-md" />
-              ))}
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {gaps.map((gap) => (
-                <GapCard key={gap.geography_key} gap={gap} />
-              ))}
-              {gaps.length === 0 && (
-                <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
-                  No regions match the current confidence and geography filters.
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </section>
 
-      <section className="border-t border-[#0B2026]/10 bg-white">
-        <div className="mx-auto grid max-w-7xl gap-5 px-5 py-6 md:px-8 lg:grid-cols-[320px_1fr]">
-        <aside className="space-y-4">
-          <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-base">Health filters</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <label className="block space-y-2 text-sm font-medium">
-                <span>District or state</span>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#0B2026]/45" />
-                  <Input
-                    className="pl-9"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search districts"
-                  />
-                </div>
-              </label>
-
-              <label className="block space-y-2 text-sm font-medium">
-                <span>State or territory</span>
-                <select
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={state}
-                  onChange={(event) => setState(event.target.value)}
-                >
-                  <option value="">All states</option>
-                  {states.map((option) => (
-                    <option key={option.state_ut} value={option.state_ut}>
-                      {option.state_ut}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block space-y-2 text-sm font-medium">
-                <span>Rank by</span>
-                <select
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={sort}
-                  onChange={(event) => setSort(event.target.value)}
-                >
-                  {sortOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={() => {
-                  setQuery('');
-                  setState('');
-                  setSort('anaemia');
-                }}
-              >
-                Reset health filters
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
-            <CardContent className="space-y-2 pt-6 text-sm">
-              <div className="font-semibold">{formatCount(selectedStateCount)} districts in scope</div>
-              <p className="leading-6 text-[#0B2026]/65">
-                Results are read through AppKit server routes from the synced Postgres table
-                <span className="font-mono"> public.health_indicators</span>.
-              </p>
-            </CardContent>
-          </Card>
-        </aside>
-
-        <div className="space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold">District results</h2>
-              <p className="text-sm text-[#0B2026]/65">Showing up to 80 districts sorted by the selected indicator.</p>
-            </div>
-            <div className="hidden items-center gap-2 rounded-md bg-[#0B2026] px-3 py-2 text-sm text-white md:flex">
-              <Activity className="h-4 w-4 text-[#FF3621]" />
-              Lakebase read path
-            </div>
-          </div>
-
-          {districtsLoading ? (
-            <div className="grid gap-3">
-              {Array.from({ length: 6 }, (_, index) => (
-                <Skeleton key={index} className="h-32 rounded-md" />
-              ))}
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {districts.map((district) => (
-                <DistrictCard key={`${district.state_ut}-${district.district_name}`} district={district} />
-              ))}
-              {districts.length === 0 && (
-                <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
-                  No districts match the current filters.
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-        </div>
-      </section>
-
-      <section className="border-t border-[#0B2026]/10 bg-[#F2EFE8]">
-        <div className="mx-auto grid max-w-7xl gap-5 px-5 py-6 md:px-8 lg:grid-cols-[320px_1fr]">
+      {activeTab === 'gaps' && (
+        <section className="mx-auto grid max-w-7xl gap-5 px-5 py-6 md:px-8 lg:grid-cols-[320px_1fr]">
           <aside className="space-y-4">
             <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
               <CardHeader>
-                <CardTitle className="text-base">Facility filters</CardTitle>
+                <CardTitle className="text-base">Gap controls</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <label className="block space-y-2 text-sm font-medium">
-                  <span>Facility, city, state, specialty</span>
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#0B2026]/45" />
-                    <Input
-                      className="pl-9"
-                      value={facilityQuery}
-                      onChange={(event) => setFacilityQuery(event.target.value)}
-                      placeholder="Search facilities"
-                    />
-                  </div>
+                  <span>Geography</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    value={gapLevel}
+                    onChange={(event) => setGapLevel(event.target.value as 'state' | 'district')}
+                  >
+                    <option value="state">State</option>
+                    <option value="district">District</option>
+                  </select>
                 </label>
 
                 <label className="block space-y-2 text-sm font-medium">
-                  <span>State</span>
+                  <span>State or region</span>
                   <select
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    value={facilityState}
-                    onChange={(event) => setFacilityState(event.target.value)}
+                    value={gapState}
+                    onChange={(event) => setGapState(event.target.value)}
                   >
                     <option value="">All states</option>
-                    {facilityOptions.states.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.value}
+                    {states.map((option) => (
+                      <option key={option.state_ut} value={option.state_ut}>
+                        {option.state_ut}
                       </option>
                     ))}
                   </select>
                 </label>
 
                 <label className="block space-y-2 text-sm font-medium">
-                  <span>Facility type</span>
+                  <span>Search geography</span>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#0B2026]/45" />
+                    <Input
+                      className="pl-9"
+                      value={gapQuery}
+                      onChange={(event) => setGapQuery(event.target.value)}
+                      placeholder="Search locations"
+                    />
+                  </div>
+                </label>
+
+                <label className="block space-y-2 text-sm font-medium">
+                  <span>Minimum confidence</span>
                   <select
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    value={facilityType}
-                    onChange={(event) => setFacilityType(event.target.value)}
+                    value={minConfidence}
+                    onChange={(event) => setMinConfidence(event.target.value)}
                   >
-                    <option value="">All types</option>
-                    {facilityOptions.types.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {formatToken(option.value)}
-                      </option>
-                    ))}
+                    <option value="0">Any confidence</option>
+                    <option value="50">Medium or high</option>
+                    <option value="75">High confidence</option>
                   </select>
                 </label>
 
@@ -724,63 +513,330 @@ export default function App() {
                   variant="outline"
                   className="w-full"
                   onClick={() => {
-                    setFacilityQuery('');
-                    setFacilityState('');
-                    setFacilityType('');
+                    setGapLevel('state');
+                    setGapState('');
+                    setGapQuery('');
+                    setMinConfidence('0');
                   }}
                 >
-                  Reset facility filters
+                  Reset gap controls
                 </Button>
               </CardContent>
             </Card>
 
             <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
-              <CardContent className="space-y-2 pt-6 text-sm">
-                <div className="font-semibold">{formatCount(selectedFacilityStateCount)} facilities in scope</div>
+              <CardContent className="space-y-3 pt-6 text-sm">
+                <div className="flex items-center gap-2 font-semibold">
+                  <Layers className="h-4 w-4 text-[#FF3621]" />
+                  Evidence model
+                </div>
                 <p className="leading-6 text-[#0B2026]/65">
-                  Searches are served from the synced Postgres table
-                  <span className="font-mono"> public.facilities</span>.
+                  Need combines anaemia, sanitation, insurance, institutional births, child stunting, and high blood
+                  pressure. Supply is down-weighted when facilities lack type, location, contact, or service details.
                 </p>
               </CardContent>
             </Card>
           </aside>
 
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <h2 className="text-xl font-semibold">Facility search</h2>
+                <h2 className="text-xl font-semibold">Highest-risk gaps in care</h2>
                 <p className="text-sm text-[#0B2026]/65">
-                  Browse up to 60 healthcare facilities with low-latency lookup filters backed by Lakebase.
+                  Ranked by high health burden, low trust-weighted facility evidence, and filtered by confidence.
                 </p>
               </div>
-              <div className="hidden items-center gap-2 rounded-md bg-white px-3 py-2 text-sm text-[#0B2026] shadow-sm md:flex">
-                <Stethoscope className="h-4 w-4 text-[#FF3621]" />
-                Facility directory
+              <div className="rounded-md border border-[#0B2026]/10 bg-white px-4 py-3 text-sm shadow-sm">
+                <div className="text-xs text-[#0B2026]/55">Current top gap</div>
+                <div className="font-semibold">
+                  {gapLoading ? 'Loading' : gapSummary.topGap ? gapSummary.topGap.geography_name : 'No match'}
+                </div>
               </div>
             </div>
 
-            {facilitiesLoading ? (
+            {gapLoading ? (
               <div className="grid gap-3">
-                {Array.from({ length: 5 }, (_, index) => (
-                  <Skeleton key={index} className="h-40 rounded-md" />
+                {Array.from({ length: 6 }, (_, index) => (
+                  <Skeleton key={index} className="h-44 rounded-md" />
                 ))}
               </div>
             ) : (
               <div className="grid gap-3">
-                {facilities.map((facility) => (
-                  <FacilityCard key={facility.unique_id} facility={facility} />
+                {gaps.map((gap) => (
+                  <GapCard key={gap.geography_key} gap={gap} />
                 ))}
-                {facilities.length === 0 && (
+                {gaps.length === 0 && (
                   <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
-                    No facilities match the current filters. If this table was just synced, the initial Lakebase snapshot may still be finishing.
+                    No regions match the current confidence and geography filters.
                   </div>
                 )}
               </div>
             )}
           </div>
-        </div>
-      </section>
+        </section>
+      )}
+
+      {activeTab === 'health' && (
+        <section className="border-t border-[#0B2026]/10 bg-white">
+          <div className="mx-auto grid max-w-7xl gap-5 px-5 py-6 md:px-8 lg:grid-cols-[320px_1fr]">
+            <aside className="space-y-4">
+              <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-base">Health filters</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <label className="block space-y-2 text-sm font-medium">
+                    <span>District or state</span>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#0B2026]/45" />
+                      <Input
+                        className="pl-9"
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder="Search districts"
+                      />
+                    </div>
+                  </label>
+
+                  <label className="block space-y-2 text-sm font-medium">
+                    <span>State or territory</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={state}
+                      onChange={(event) => setState(event.target.value)}
+                    >
+                      <option value="">All states</option>
+                      {states.map((option) => (
+                        <option key={option.state_ut} value={option.state_ut}>
+                          {option.state_ut}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block space-y-2 text-sm font-medium">
+                    <span>Rank by</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={sort}
+                      onChange={(event) => setSort(event.target.value)}
+                    >
+                      {sortOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      setQuery('');
+                      setState('');
+                      setSort('anaemia');
+                    }}
+                  >
+                    Reset health filters
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
+                <CardContent className="space-y-2 pt-6 text-sm">
+                  <div className="font-semibold">{formatCount(selectedStateCount)} districts in scope</div>
+                  <p className="leading-6 text-[#0B2026]/65">
+                    Results are read through AppKit server routes from the synced Postgres table
+                    <span className="font-mono"> public.health_indicators</span>.
+                  </p>
+                </CardContent>
+              </Card>
+            </aside>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-semibold">District results</h2>
+                  <p className="text-sm text-[#0B2026]/65">
+                    Showing up to 80 districts sorted by the selected indicator.
+                  </p>
+                </div>
+                <div className="hidden items-center gap-2 rounded-md bg-[#0B2026] px-3 py-2 text-sm text-white md:flex">
+                  <Activity className="h-4 w-4 text-[#FF3621]" />
+                  Lakebase read path
+                </div>
+              </div>
+
+              {districtsLoading ? (
+                <div className="grid gap-3">
+                  {Array.from({ length: 6 }, (_, index) => (
+                    <Skeleton key={index} className="h-32 rounded-md" />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  {districts.map((district) => (
+                    <DistrictCard key={`${district.state_ut}-${district.district_name}`} district={district} />
+                  ))}
+                  {districts.length === 0 && (
+                    <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
+                      No districts match the current filters.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {activeTab === 'facilities' && (
+        <section className="border-t border-[#0B2026]/10 bg-[#F2EFE8]">
+          <div className="mx-auto grid max-w-7xl gap-5 px-5 py-6 md:px-8 lg:grid-cols-[320px_1fr]">
+            <aside className="space-y-4">
+              <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-base">Facility filters</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <label className="block space-y-2 text-sm font-medium">
+                    <span>Facility, city, state, specialty</span>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#0B2026]/45" />
+                      <Input
+                        className="pl-9"
+                        value={facilityQuery}
+                        onChange={(event) => setFacilityQuery(event.target.value)}
+                        placeholder="Search facilities"
+                      />
+                    </div>
+                  </label>
+
+                  <label className="block space-y-2 text-sm font-medium">
+                    <span>State</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={facilityState}
+                      onChange={(event) => setFacilityState(event.target.value)}
+                    >
+                      <option value="">All states</option>
+                      {facilityOptions.states.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block space-y-2 text-sm font-medium">
+                    <span>Facility type</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={facilityType}
+                      onChange={(event) => setFacilityType(event.target.value)}
+                    >
+                      <option value="">All types</option>
+                      {facilityOptions.types.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {formatToken(option.value)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      setFacilityQuery('');
+                      setFacilityState('');
+                      setFacilityType('');
+                    }}
+                  >
+                    Reset facility filters
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
+                <CardContent className="space-y-2 pt-6 text-sm">
+                  <div className="font-semibold">{formatCount(selectedFacilityStateCount)} facilities in scope</div>
+                  <p className="leading-6 text-[#0B2026]/65">
+                    Searches are served from the synced Postgres table
+                    <span className="font-mono"> public.facilities</span>.
+                  </p>
+                </CardContent>
+              </Card>
+            </aside>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-semibold">Facility search</h2>
+                  <p className="text-sm text-[#0B2026]/65">
+                    Browse up to 60 healthcare facilities with low-latency lookup filters backed by Lakebase.
+                  </p>
+                </div>
+                <div className="hidden items-center gap-2 rounded-md bg-white px-3 py-2 text-sm text-[#0B2026] shadow-sm md:flex">
+                  <Stethoscope className="h-4 w-4 text-[#FF3621]" />
+                  Facility directory
+                </div>
+              </div>
+
+              {facilitiesLoading ? (
+                <div className="grid gap-3">
+                  {Array.from({ length: 5 }, (_, index) => (
+                    <Skeleton key={index} className="h-40 rounded-md" />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  {facilities.map((facility) => (
+                    <FacilityCard key={facility.unique_id} facility={facility} />
+                  ))}
+                  {facilities.length === 0 && (
+                    <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
+                      No facilities match the current filters. If this table was just synced, the initial Lakebase
+                      snapshot may still be finishing.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
     </main>
+  );
+}
+
+function TabButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      className={`flex h-11 items-center justify-center gap-2 rounded-md px-4 text-sm font-semibold transition-colors ${
+        active ? 'bg-[#0B2026] text-white shadow-sm' : 'text-[#0B2026]/68 hover:bg-[#0B2026]/6 hover:text-[#0B2026]'
+      }`}
+      onClick={onClick}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
   );
 }
 
@@ -847,10 +903,22 @@ function GapCard({ gap }: { gap: GapRegion }) {
           </div>
 
           <div className="grid gap-2 text-sm sm:grid-cols-2 lg:min-w-[300px] lg:grid-cols-1">
-            <MiniStat label="Facilities" value={`${formatCount(gap.facility_count)} total, ${formatCount(gap.hospital_count)} hospitals`} />
-            <MiniStat label="Evidence density" value={`${formatScore(gap.facility_evidence_per_10k_households)} per 10k surveyed households`} />
-            <MiniStat label="Facility trust signals" value={`${formatCount(gap.geocoded_count)} mapped, ${formatCount(gap.contactable_count)} contactable`} />
-            <MiniStat label="Survey support" value={`${formatCount(gap.households_surveyed)} households, ${formatCount(gap.women_interviewed)} women`} />
+            <MiniStat
+              label="Facilities"
+              value={`${formatCount(gap.facility_count)} total, ${formatCount(gap.hospital_count)} hospitals`}
+            />
+            <MiniStat
+              label="Evidence density"
+              value={`${formatScore(gap.facility_evidence_per_10k_households)} per 10k surveyed households`}
+            />
+            <MiniStat
+              label="Facility trust signals"
+              value={`${formatCount(gap.geocoded_count)} mapped, ${formatCount(gap.contactable_count)} contactable`}
+            />
+            <MiniStat
+              label="Survey support"
+              value={`${formatCount(gap.households_surveyed)} households, ${formatCount(gap.women_interviewed)} women`}
+            />
           </div>
         </div>
 
@@ -882,15 +950,7 @@ function ConfidenceBadge({ label }: { label: GapRegion['confidence_label'] }) {
   );
 }
 
-function ScoreBar({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: 'red' | 'green' | 'blue' | 'dark';
-}) {
+function ScoreBar({ label, value, tone }: { label: string; value: number; tone: 'red' | 'green' | 'blue' | 'dark' }) {
   const toneClass = {
     red: 'bg-[#FF3621]',
     green: 'bg-emerald-600',
@@ -921,8 +981,7 @@ function DistrictCard({ district }: { district: District }) {
             <h3 className="truncate text-lg font-semibold">{district.district_name}</h3>
             <p className="text-sm text-[#0B2026]/65">{district.state_ut}</p>
             <p className="mt-3 text-sm text-[#0B2026]/70">
-              {formatCount(district.households_surveyed)} households surveyed,
-              {' '}
+              {formatCount(district.households_surveyed)} households surveyed,{' '}
               {formatCount(district.women_15_49_interviewed)} women interviewed
             </p>
           </div>
@@ -939,7 +998,10 @@ function DistrictCard({ district }: { district: District }) {
           <MiniStat label="Women literacy" value={district.women_age_15_49_who_are_literate_pct} />
           <MiniStat label="Clean cooking fuel" value={district.households_using_clean_fuel_for_cooking_pct} />
           <MiniStat label="Child stunting" value={district.child_u5_who_are_stunted_height_for_age_18_pct} />
-          <MiniStat label="High BP, women" value={district.w15_plus_with_high_bp_sys_gte_140_mmhg_and_or_dia_gte_90_mm_pct} />
+          <MiniStat
+            label="High BP, women"
+            value={district.w15_plus_with_high_bp_sys_gte_140_mmhg_and_or_dia_gte_90_mm_pct}
+          />
         </div>
       </CardContent>
     </Card>
@@ -1005,11 +1067,7 @@ function MetaLine({ icon, text }: { icon: React.ReactNode; text: string }) {
 }
 
 function Badge({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="rounded-full bg-[#0B2026]/6 px-2.5 py-1 font-medium text-[#0B2026]">
-      {children}
-    </span>
-  );
+  return <span className="rounded-full bg-[#0B2026]/6 px-2.5 py-1 font-medium text-[#0B2026]">{children}</span>;
 }
 
 function Indicator({ label, value, tone }: { label: string; value: number; tone: 'red' | 'green' | 'blue' | 'dark' }) {
