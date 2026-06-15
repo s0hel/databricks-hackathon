@@ -1,5 +1,6 @@
 import { Application } from 'express';
 import { z } from 'zod';
+import { effectiveFacilitiesCte } from '../lib/facility-edits';
 
 interface AppKitWithLakebase {
   lakebase: {
@@ -101,7 +102,7 @@ const buildFacilityGeo = (level: 'state' | 'district') => {
         WHERE NULLIF(specialties, 'null') IS NOT NULL
           OR NULLIF(capability, 'null') IS NOT NULL
       )::float AS described_count
-    FROM public.facilities
+    FROM effective_facilities
     WHERE ${geographyName} IS NOT NULL
     GROUP BY ${normalizedGeo(geographyName)}${
       level === 'district' ? `, ${normalizedGeo(`TRIM(NULLIF(address_state_or_region, 'null'))`)}` : ''
@@ -157,7 +158,7 @@ const buildHospitalPoints = () => `
       TRIM(NULLIF(address_state_or_region, 'null')) AS state_name,
       ${coordinateColumn('latitude')} AS latitude,
       ${coordinateColumn('longitude')} AS longitude
-    FROM public.facilities
+    FROM effective_facilities
     WHERE NULLIF(facility_type_id, 'null') = 'hospital'
   ) coordinates
   WHERE latitude BETWEEN 6 AND 38
@@ -203,6 +204,7 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
             WITH health_geo AS (
               ${buildHealthGeo(level)}
             ),
+            ${effectiveFacilitiesCte},
             facility_geo AS (
               ${buildFacilityGeo(level)}
             ),

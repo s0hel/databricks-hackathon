@@ -6,10 +6,12 @@ import {
   Building2,
   CheckCircle2,
   Database,
+  Edit3,
   Droplets,
   Gauge,
   Globe,
   HeartPulse,
+  History,
   Info,
   Layers,
   MapPin,
@@ -19,8 +21,19 @@ import {
   Sparkles,
   Stethoscope,
   Target,
+  Save,
+  X,
 } from 'lucide-react';
-import { Button, Card, CardContent, CardHeader, CardTitle, GenieChat, Input, Skeleton } from '@databricks/appkit-ui/react';
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  GenieChat,
+  Input,
+  Skeleton,
+} from '@databricks/appkit-ui/react';
 import { INDIA_BOUNDARY_PATHS, INDIA_MAP_BOUNDS } from './lib/india-boundary';
 
 interface Overview {
@@ -88,8 +101,37 @@ interface Facility {
   official_website: string | null;
   specialties: string | null;
   capability: string | null;
+  doctors: string | null;
   latitude: string | null;
   longitude: string | null;
+}
+
+interface FacilityAuditLog {
+  id: number;
+  facility_unique_id: string;
+  changed_at: string;
+  changed_by: string;
+  change_note: string | null;
+  changed_fields: string[];
+  old_values: Partial<Facility>;
+  new_values: Partial<Facility>;
+}
+
+interface FacilityEditForm {
+  name: string;
+  description: string | null;
+  facility_type_id: string | null;
+  operator_type_id: string | null;
+  address_city: string | null;
+  address_state_or_region: string | null;
+  official_phone: string | null;
+  official_website: string | null;
+  specialties: string | null;
+  capability: string | null;
+  doctors: string | null;
+  latitude: string | null;
+  longitude: string | null;
+  note: string;
 }
 
 interface GapRegion {
@@ -146,8 +188,7 @@ type MapMetric = 'gap' | 'need';
 const metricDescriptions: Record<ScoreMetricLabel, string> = {
   'Gap score':
     'Overall priority score from health need, reduced by supply adequacy, plus 30% of access pressure. Higher means a stronger likely care gap.',
-  Need:
-    'Average burden score from anaemia, child stunting, high blood pressure, and gaps in sanitation, insurance, and institutional births. Higher means greater health need.',
+  Need: 'Average burden score from anaemia, child stunting, high blood pressure, and gaps in sanitation, insurance, and institutional births. Higher means greater health need.',
   'Supply adequacy':
     'Log-scaled facility evidence per 10k surveyed households. Hospitals count most, clinics partially, and mapped, contactable, described facilities add trust signals. Higher means stronger supply.',
   'Access pressure':
@@ -156,24 +197,57 @@ const metricDescriptions: Record<ScoreMetricLabel, string> = {
     'Data support score from surveyed households, women interviewed, facility count, pincode coverage, and mapped pincodes. Higher means the gap classification is better supported.',
 };
 
-const formatPct = (value: number | string | null | undefined) => {
+const toFiniteNumber = (value: number | string | null | undefined) => {
+  if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : 'n/a';
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const formatPct = (value: number | string | null | undefined) => {
+  const numeric = toFiniteNumber(value);
+  return numeric !== null ? `${numeric.toFixed(1)}%` : 'n/a';
 };
 
 const formatCount = (value: number | string | null | undefined) => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? new Intl.NumberFormat('en-US').format(numeric) : 'n/a';
+  const numeric = toFiniteNumber(value);
+  return numeric !== null ? new Intl.NumberFormat('en-US').format(numeric) : 'n/a';
 };
 
 const formatScore = (value: number | string | null | undefined) => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toFixed(1) : 'n/a';
+  const numeric = toFiniteNumber(value);
+  return numeric !== null ? numeric.toFixed(1) : 'n/a';
 };
 
 const formatKm = (value: number | string | null | undefined) => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? `${numeric.toFixed(1)} km` : 'n/a';
+  const numeric = toFiniteNumber(value);
+  return numeric !== null ? `${numeric.toFixed(1)} km` : 'n/a';
+};
+
+const formatMinutes = (value: number | string | null | undefined) => {
+  const numeric = toFiniteNumber(value);
+  return numeric !== null ? `${Math.round(numeric)} min` : 'n/a';
+};
+
+const formatCompact = (value: number | string | null | undefined) => {
+  const numeric = toFiniteNumber(value);
+  return numeric !== null
+    ? new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(numeric)
+    : 'n/a';
+};
+
+const clamp = (value: number, min = 0, max = 100) => Math.max(min, Math.min(max, value));
+
+const getHospitalCoverageIndex = (gap: GapRegion) => clamp(toFiniteNumber(gap.supply_adequacy_score) ?? 0);
+
+const getUnderservedPopulationProxy = (gap: GapRegion) => {
+  const households = toFiniteNumber(gap.households_surveyed);
+  const gapWeight = clamp(Number(gap.gap_score) || 0) / 100;
+  return households !== null ? Math.round(households * gapWeight) : null;
+};
+
+const getTravelTimeMinutes = (gap: GapRegion) => {
+  const distanceKm = toFiniteNumber(gap.nearest_hospital_km);
+  return distanceKm !== null ? distanceKm * 1.5 : null;
 };
 
 const gapCardId = (key: string) => `gap-card-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
@@ -224,6 +298,45 @@ async function fetchJson<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function saveJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+const toFormValue = (value: string | null | undefined) => {
+  if (!value || value === 'null') return '';
+  return value;
+};
+
+const toNullableFormValue = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+};
+
+const buildFacilityForm = (facility: Facility): FacilityEditForm => ({
+  name: toFormValue(facility.name),
+  description: toNullableFormValue(toFormValue(facility.description)),
+  facility_type_id: toNullableFormValue(toFormValue(facility.facility_type_id)),
+  operator_type_id: toNullableFormValue(toFormValue(facility.operator_type_id)),
+  address_city: toNullableFormValue(toFormValue(facility.address_city)),
+  address_state_or_region: toNullableFormValue(toFormValue(facility.address_state_or_region)),
+  official_phone: toNullableFormValue(toFormValue(facility.official_phone)),
+  official_website: toNullableFormValue(toFormValue(facility.official_website)),
+  specialties: toNullableFormValue(toFormValue(facility.specialties)),
+  capability: toNullableFormValue(toFormValue(facility.capability)),
+  doctors: toNullableFormValue(toFormValue(facility.doctors)),
+  latitude: toNullableFormValue(toFormValue(facility.latitude)),
+  longitude: toNullableFormValue(toFormValue(facility.longitude)),
+  note: '',
+});
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('gaps');
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -255,6 +368,7 @@ export default function App() {
   const [, setFacilityLoading] = useState(true);
   const [facilitiesLoading, setFacilitiesLoading] = useState(true);
   const [facilityError, setFacilityError] = useState<string | null>(null);
+  const [editRevision, setEditRevision] = useState(0);
 
   useEffect(() => {
     Promise.all([fetchJson<Overview>('/api/health/overview'), fetchJson<StateOption[]>('/api/health/states')])
@@ -277,7 +391,7 @@ export default function App() {
       })
       .catch((err) => setFacilityError(err instanceof Error ? err.message : 'Failed to load facility data'))
       .finally(() => setFacilityLoading(false));
-  }, []);
+  }, [editRevision]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -305,7 +419,7 @@ export default function App() {
     void loadGaps();
 
     return () => controller.abort();
-  }, [gapLevel, gapQuery, gapState, minConfidence]);
+  }, [editRevision, gapLevel, gapQuery, gapState, minConfidence]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -359,7 +473,7 @@ export default function App() {
     void loadFacilities();
 
     return () => controller.abort();
-  }, [facilityQuery, facilityState, facilityType]);
+  }, [editRevision, facilityQuery, facilityState, facilityType]);
 
   const selectedStateCount = useMemo(() => {
     if (!state) return states.reduce((sum, item) => sum + Number(item.district_count), 0);
@@ -386,7 +500,7 @@ export default function App() {
 
   const selectedGap = useMemo(
     () => gaps.find((gap) => gap.geography_key === selectedGapKey) ?? null,
-    [gaps, selectedGapKey],
+    [gaps, selectedGapKey]
   );
 
   useEffect(() => {
@@ -400,6 +514,13 @@ export default function App() {
     window.setTimeout(() => {
       document.getElementById(gapCardId(gap.geography_key))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 50);
+  };
+
+  const handleFacilitySaved = (updatedFacility: Facility) => {
+    setFacilities((current) =>
+      current.map((facility) => (facility.unique_id === updatedFacility.unique_id ? updatedFacility : facility))
+    );
+    setEditRevision((revision) => revision + 1);
   };
 
   return (
@@ -603,6 +724,8 @@ export default function App() {
           </aside>
 
           <div className="space-y-4">
+            <InsightLayersPanel gaps={gaps} selectedGap={selectedGap} loading={gapLoading} />
+
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <h2 className="text-xl font-semibold">Highest-risk gaps in care</h2>
@@ -643,8 +766,16 @@ export default function App() {
                         </p>
                       </div>
                       <div className="inline-grid rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-1 text-sm sm:grid-cols-2">
-                        <MapMetricButton active={mapMetric === 'gap'} label="Gaps" onClick={() => setMapMetric('gap')} />
-                        <MapMetricButton active={mapMetric === 'need'} label="Needs" onClick={() => setMapMetric('need')} />
+                        <MapMetricButton
+                          active={mapMetric === 'gap'}
+                          label="Gaps"
+                          onClick={() => setMapMetric('gap')}
+                        />
+                        <MapMetricButton
+                          active={mapMetric === 'need'}
+                          label="Needs"
+                          onClick={() => setMapMetric('need')}
+                        />
                       </div>
                     </div>
 
@@ -890,7 +1021,7 @@ export default function App() {
               ) : (
                 <div className="grid gap-3">
                   {facilities.map((facility) => (
-                    <FacilityCard key={facility.unique_id} facility={facility} />
+                    <FacilityCard key={facility.unique_id} facility={facility} onSaved={handleFacilitySaved} />
                   ))}
                   {facilities.length === 0 && (
                     <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
@@ -1039,7 +1170,12 @@ function GapHeatMap({
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
       <div className="relative min-h-[420px] overflow-hidden rounded-md border border-[#0B2026]/10 bg-[#E8F0ED]">
-        <svg className="h-full min-h-[420px] w-full" viewBox="0 0 100 100" role="img" aria-label={`${legendLabel} heat map`}>
+        <svg
+          className="h-full min-h-[420px] w-full"
+          viewBox="0 0 100 100"
+          role="img"
+          aria-label={`${legendLabel} heat map`}
+        >
           <defs>
             <linearGradient id="map-water" x1="0" x2="1" y1="0" y2="1">
               <stop offset="0%" stopColor="#F8FAF7" />
@@ -1152,7 +1288,9 @@ function GapHeatMap({
               onClick={() => onSelect(gap)}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold">{index + 1}. {gap.geography_name}</span>
+                <span className="font-semibold">
+                  {index + 1}. {gap.geography_name}
+                </span>
                 <span>{formatScore(value)}</span>
               </div>
               <div className="mt-1 text-xs text-[#0B2026]/58">
@@ -1165,6 +1303,217 @@ function GapHeatMap({
               No centroid coordinates are available for the current filters.
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function finiteValues(values: Array<number | null | undefined>) {
+  return values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+}
+
+function buildHistogramBins(values: number[], binCount: number, domainMin: number, domainMax: number) {
+  const max = domainMax > domainMin ? domainMax : domainMin + 1;
+  const bins = Array.from({ length: binCount }, () => 0);
+
+  values.forEach((value) => {
+    const normalized = clamp((value - domainMin) / (max - domainMin), 0, 1);
+    const index = Math.min(binCount - 1, Math.floor(normalized * binCount));
+    bins[index] += 1;
+  });
+
+  return {
+    bins,
+    domainMin,
+    domainMax: max,
+    maxCount: Math.max(1, ...bins),
+  };
+}
+
+function InsightLayersPanel({
+  gaps,
+  selectedGap,
+  loading,
+}: {
+  gaps: GapRegion[];
+  selectedGap: GapRegion | null;
+  loading: boolean;
+}) {
+  const activeGap = selectedGap ?? gaps[0] ?? null;
+  const coverageValues = useMemo(() => finiteValues(gaps.map(getHospitalCoverageIndex)), [gaps]);
+  const underservedValues = useMemo(() => finiteValues(gaps.map(getUnderservedPopulationProxy)), [gaps]);
+  const travelValues = useMemo(() => finiteValues(gaps.map(getTravelTimeMinutes)), [gaps]);
+  const underservedMax = Math.max(1, ...underservedValues);
+  const travelMax = Math.max(30, ...travelValues);
+
+  return (
+    <div className="rounded-md border border-[#0B2026]/10 bg-white p-4 shadow-sm">
+      <div className="mb-4 flex flex-col gap-3 border-b border-[#0B2026]/10 pb-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-normal text-[#0B2026]/50">
+            <Layers className="h-4 w-4 text-[#FF3621]" />
+            Insight layers
+          </div>
+          <div className="mt-1 text-sm font-semibold">
+            {activeGap ? activeGap.geography_name : 'No region selected'}
+          </div>
+        </div>
+        <div className="text-xs text-[#0B2026]/55">Current filters, selected-region marker</div>
+      </div>
+
+      {loading ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          <Skeleton className="h-36 rounded-md" />
+          <Skeleton className="h-36 rounded-md" />
+          <Skeleton className="h-36 rounded-md" />
+        </div>
+      ) : (
+        <div className="grid gap-3 xl:grid-cols-3">
+          <div className="rounded-md border border-sky-500/80 bg-white p-3 shadow-sm">
+            <HistogramMetric
+              label="Hospital Coverage Index"
+              unit="0-100"
+              values={coverageValues}
+              selectedValue={activeGap ? getHospitalCoverageIndex(activeGap) : null}
+              domainMin={0}
+              domainMax={100}
+              tone="green"
+              lowLabel="Poor"
+              highLabel="Excellent"
+              formatter={formatScore}
+              description="Uses the app's supply adequacy score: hospital, clinic, mapped, contactable, and described facility evidence per surveyed households."
+            />
+          </div>
+
+          <div className="rounded-md border border-sky-500/80 bg-white p-3 shadow-sm">
+            <HistogramMetric
+              label="Amount of Population Underserved"
+              unit="weighted households"
+              values={underservedValues}
+              selectedValue={activeGap ? getUnderservedPopulationProxy(activeGap) : null}
+              domainMin={0}
+              domainMax={underservedMax}
+              tone="red"
+              lowLabel="Min"
+              highLabel="Max"
+              formatter={formatCompact}
+              description="Proxy from surveyed households weighted by the gap score. It ranks relative underserved demand because the current route does not expose population density."
+            />
+          </div>
+
+          <div className="rounded-md border border-[#0B2026]/10 bg-white p-3 shadow-sm">
+            <HistogramMetric
+              label="Travel time to nearest hospital"
+              unit="minutes"
+              values={travelValues}
+              selectedValue={activeGap ? getTravelTimeMinutes(activeGap) : null}
+              domainMin={0}
+              domainMax={travelMax}
+              tone="gray"
+              lowLabel="Fast access"
+              highLabel="Delayed access"
+              formatter={formatMinutes}
+              description="Estimated as nearest-hospital distance multiplied by 1.5 minutes per kilometer."
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistogramMetric({
+  label,
+  unit,
+  values,
+  selectedValue,
+  domainMin,
+  domainMax,
+  tone,
+  lowLabel,
+  highLabel,
+  formatter,
+  description,
+}: {
+  label: string;
+  unit: string;
+  values: number[];
+  selectedValue: number | null | undefined;
+  domainMin: number;
+  domainMax: number;
+  tone: 'green' | 'red' | 'gray';
+  lowLabel: string;
+  highLabel: string;
+  formatter: (value: number | string | null | undefined) => string;
+  description: string;
+}) {
+  const histogram = buildHistogramBins(values, 32, domainMin, domainMax);
+  const selectedNumber = selectedValue === null || selectedValue === undefined ? Number.NaN : Number(selectedValue);
+  const selectedPercent = Number.isFinite(selectedNumber)
+    ? clamp(((selectedNumber - histogram.domainMin) / (histogram.domainMax - histogram.domainMin)) * 100)
+    : null;
+  const colors = {
+    green: ['#DDF5E5', '#7CC99A', '#1F7A5A', '#0B4B49'],
+    red: ['#FFE1D4', '#FF9A6B', '#E85B42', '#A92924'],
+    gray: ['#E6E7E4', '#C3C6C3', '#8B908E', '#5D6463'],
+  }[tone];
+
+  return (
+    <div>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-1.5 text-sm font-semibold">
+            <span>{label}</span>
+            <MetricInfo label={label} description={description} />
+          </div>
+          <div className="mt-1 text-xs text-[#0B2026]/55">
+            Selected: {formatter(Number.isFinite(selectedNumber) ? selectedNumber : null)}
+          </div>
+        </div>
+        <div className="shrink-0 text-xs text-[#0B2026]/45">{unit}</div>
+      </div>
+
+      <div className="relative h-24 border-b border-[#0B2026]/25">
+        <div className="absolute inset-x-0 bottom-0 flex h-20 items-end gap-1">
+          {histogram.bins.map((count, index) => {
+            const colorIndex = Math.min(colors.length - 1, Math.floor((index / histogram.bins.length) * colors.length));
+            const height = Math.max(4, (count / histogram.maxCount) * 78);
+
+            return (
+              <div
+                key={`${label}-${index}`}
+                className="min-w-0 flex-1 rounded-t-sm"
+                style={{
+                  height,
+                  backgroundColor: count > 0 ? colors[colorIndex] : '#EEF0ED',
+                  opacity: count > 0 ? 1 : 0.55,
+                }}
+              />
+            );
+          })}
+        </div>
+
+        {selectedPercent !== null && (
+          <div
+            className="absolute bottom-0 top-1 w-0.5 rounded-full bg-[#2F6BFF]"
+            style={{ left: `${selectedPercent}%` }}
+            aria-hidden="true"
+          />
+        )}
+        <span className="absolute -bottom-1 left-0 h-3 w-3 rounded-full border-2 border-[#6C9DFF] bg-white" />
+        <span className="absolute -bottom-1 right-0 h-3 w-3 rounded-full border-2 border-[#6C9DFF] bg-white" />
+      </div>
+
+      <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-start gap-2 text-[11px] text-[#0B2026]/55">
+        <div>
+          <div>{lowLabel}</div>
+          <div className="mt-1 font-medium text-[#0B2026]/70">{formatter(histogram.domainMin)}</div>
+        </div>
+        <div className="text-center text-[#0B2026]/40">{formatCount(values.length)} regions</div>
+        <div className="text-right">
+          <div>{highLabel}</div>
+          <div className="mt-1 font-medium text-[#0B2026]/70">{formatter(histogram.domainMax)}</div>
         </div>
       </div>
     </div>
@@ -1357,11 +1706,73 @@ function DistrictCard({ district }: { district: District }) {
   );
 }
 
-function FacilityCard({ facility }: { facility: Facility }) {
+function FacilityCard({ facility, onSaved }: { facility: Facility; onSaved: (facility: Facility) => void }) {
   const city = normalizeText(facility.address_city);
   const state = normalizeText(facility.address_state_or_region);
   const website = normalizeText(facility.official_website, '');
   const phone = normalizeText(facility.official_phone, '');
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<FacilityEditForm>(() => buildFacilityForm(facility));
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditLog, setAuditLog] = useState<FacilityAuditLog[]>([]);
+
+  useEffect(() => {
+    setForm(buildFacilityForm(facility));
+  }, [facility]);
+
+  const updateForm = (field: keyof FacilityEditForm, value: string) => {
+    setForm((current) => ({
+      ...current,
+      [field]: field === 'name' || field === 'note' ? value : toNullableFormValue(value),
+    }));
+  };
+
+  const loadAuditLog = async () => {
+    setAuditLoading(true);
+    setSaveError(null);
+    try {
+      const rows = await fetchJson<FacilityAuditLog[]>(
+        `/api/facilities/${encodeURIComponent(facility.unique_id)}/audit`
+      );
+      setAuditLog(rows);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to load audit log');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const handleAuditToggle = () => {
+    const nextOpen = !auditOpen;
+    setAuditOpen(nextOpen);
+    if (nextOpen) {
+      void loadAuditLog();
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const result = await saveJson<{ facility: Facility }>(
+        `/api/facilities/${encodeURIComponent(facility.unique_id)}`,
+        form
+      );
+      onSaved(result.facility);
+      setEditing(false);
+      setForm(buildFacilityForm(result.facility));
+      if (auditOpen) {
+        void loadAuditLog();
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save facility');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <Card className="rounded-md border-[#0B2026]/10 bg-white shadow-sm">
@@ -1369,28 +1780,149 @@ function FacilityCard({ facility }: { facility: Facility }) {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 space-y-3">
             <div>
-              <h3 className="text-lg font-semibold">{facility.name}</h3>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#0B2026]/60">
-                <Badge>{formatToken(facility.facility_type_id)}</Badge>
-                <Badge>{formatToken(facility.operator_type_id)}</Badge>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold">{facility.name}</h3>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#0B2026]/60">
+                    <Badge>{formatToken(facility.facility_type_id)}</Badge>
+                    <Badge>{formatToken(facility.operator_type_id)}</Badge>
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button type="button" variant="outline" className="h-9 gap-2" onClick={() => setEditing(true)}>
+                    <Edit3 className="h-4 w-4" />
+                    Edit
+                  </Button>
+                  <Button type="button" variant="outline" className="h-9 gap-2" onClick={handleAuditToggle}>
+                    <History className="h-4 w-4" />
+                    Audit
+                  </Button>
+                </div>
               </div>
             </div>
 
-            <p className="text-sm leading-6 text-[#0B2026]/72">
-              {normalizeText(facility.description, 'No description available.')}
-            </p>
+            {editing ? (
+              <div className="space-y-4 rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-4">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <EditField label="Facility name" value={form.name} onChange={(value) => updateForm('name', value)} />
+                  <EditField
+                    label="Facility type"
+                    value={toFormValue(form.facility_type_id)}
+                    onChange={(value) => updateForm('facility_type_id', value)}
+                  />
+                  <EditField
+                    label="Operator type"
+                    value={toFormValue(form.operator_type_id)}
+                    onChange={(value) => updateForm('operator_type_id', value)}
+                  />
+                  <EditField
+                    label="City"
+                    value={toFormValue(form.address_city)}
+                    onChange={(value) => updateForm('address_city', value)}
+                  />
+                  <EditField
+                    label="State or region"
+                    value={toFormValue(form.address_state_or_region)}
+                    onChange={(value) => updateForm('address_state_or_region', value)}
+                  />
+                  <EditField
+                    label="Phone"
+                    value={toFormValue(form.official_phone)}
+                    onChange={(value) => updateForm('official_phone', value)}
+                  />
+                  <EditField
+                    label="Website"
+                    value={toFormValue(form.official_website)}
+                    onChange={(value) => updateForm('official_website', value)}
+                  />
+                  <EditField
+                    label="Latitude"
+                    value={toFormValue(form.latitude)}
+                    onChange={(value) => updateForm('latitude', value)}
+                  />
+                  <EditField
+                    label="Longitude"
+                    value={toFormValue(form.longitude)}
+                    onChange={(value) => updateForm('longitude', value)}
+                  />
+                  <EditField
+                    label="Doctors"
+                    value={toFormValue(form.doctors)}
+                    onChange={(value) => updateForm('doctors', value)}
+                  />
+                </div>
+                <EditArea
+                  label="Description"
+                  value={toFormValue(form.description)}
+                  onChange={(value) => updateForm('description', value)}
+                />
+                <EditArea
+                  label="Specialties"
+                  value={toFormValue(form.specialties)}
+                  onChange={(value) => updateForm('specialties', value)}
+                />
+                <EditArea
+                  label="Capabilities"
+                  value={toFormValue(form.capability)}
+                  onChange={(value) => updateForm('capability', value)}
+                />
+                <EditArea
+                  label="Change note"
+                  value={form.note}
+                  onChange={(value) => updateForm('note', value)}
+                  rows={2}
+                />
+                {saveError && <InlineError message={saveError} />}
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      setForm(buildFacilityForm(facility));
+                      setEditing(false);
+                      setSaveError(null);
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    className="gap-2"
+                    onClick={() => {
+                      void handleSave();
+                    }}
+                    disabled={saving || !form.name.trim()}
+                  >
+                    <Save className="h-4 w-4" />
+                    {saving ? 'Saving' : 'Save'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="text-sm leading-6 text-[#0B2026]/72">
+                  {normalizeText(facility.description, 'No description available.')}
+                </p>
 
-            <div className="grid gap-2 text-sm text-[#0B2026]/72 sm:grid-cols-2">
-              <MetaLine icon={<MapPin className="h-4 w-4" />} text={`${city}${state !== 'n/a' ? `, ${state}` : ''}`} />
-              <MetaLine icon={<Phone className="h-4 w-4" />} text={phone || 'No phone listed'} />
-              <MetaLine icon={<Globe className="h-4 w-4" />} text={website || 'No website listed'} />
-              <MetaLine icon={<Stethoscope className="h-4 w-4" />} text={parseListPreview(facility.specialties)} />
-            </div>
+                <div className="grid gap-2 text-sm text-[#0B2026]/72 sm:grid-cols-2">
+                  <MetaLine
+                    icon={<MapPin className="h-4 w-4" />}
+                    text={`${city}${state !== 'n/a' ? `, ${state}` : ''}`}
+                  />
+                  <MetaLine icon={<Phone className="h-4 w-4" />} text={phone || 'No phone listed'} />
+                  <MetaLine icon={<Globe className="h-4 w-4" />} text={website || 'No website listed'} />
+                  <MetaLine icon={<Stethoscope className="h-4 w-4" />} text={parseListPreview(facility.specialties)} />
+                </div>
+              </>
+            )}
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[240px] lg:grid-cols-1">
             <MiniStat label="Directory ID" value={facility.unique_id.slice(0, 8)} />
             <MiniStat label="Capabilities" value={parseListPreview(facility.capability)} />
+            <MiniStat label="Doctors" value={parseListPreview(facility.doctors)} />
             <MiniStat
               label="Coordinates"
               value={
@@ -1401,8 +1933,72 @@ function FacilityCard({ facility }: { facility: Facility }) {
             />
           </div>
         </div>
+        {auditOpen && (
+          <div className="mt-4 border-t border-[#0B2026]/10 pt-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+              <History className="h-4 w-4 text-[#FF3621]" />
+              Audit log
+            </div>
+            {auditLoading ? (
+              <Skeleton className="h-20 rounded-md" />
+            ) : (
+              <div className="space-y-2">
+                {auditLog.map((entry) => (
+                  <div key={entry.id} className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold">{entry.changed_by}</span>
+                      <span className="text-xs text-[#0B2026]/55">{new Date(entry.changed_at).toLocaleString()}</span>
+                    </div>
+                    <div className="mt-1 text-[#0B2026]/65">
+                      {entry.changed_fields.map((field) => formatToken(field)).join(', ')}
+                    </div>
+                    {entry.change_note && <div className="mt-2 text-[#0B2026]/72">{entry.change_note}</div>}
+                  </div>
+                ))}
+                {auditLog.length === 0 && (
+                  <div className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-3 text-sm text-[#0B2026]/65">
+                    No saved edits yet.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
+  );
+}
+
+function EditField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="block space-y-1.5 text-sm font-medium">
+      <span>{label}</span>
+      <Input value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function EditArea({
+  label,
+  value,
+  onChange,
+  rows = 3,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  rows?: number;
+}) {
+  return (
+    <label className="block space-y-1.5 text-sm font-medium">
+      <span>{label}</span>
+      <textarea
+        className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus:ring-2 focus:ring-[#0B2026]/20"
+        rows={rows}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
   );
 }
 
