@@ -14,6 +14,22 @@ const numericColumn = (column: string) => `
   NULLIF(REGEXP_REPLACE(NULLIF(${column}::text, 'null'), '[^0-9.-]', '', 'g'), '')::float
 `;
 
+const coordinateColumn = (column: string) => `
+  CASE
+    WHEN NULLIF(${column}::text, 'null') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${column}::text::float
+  END
+`;
+
+const normalizedGeo = (expression: string) => `
+  CASE
+    WHEN LOWER(TRIM(${expression})) IN ('maharastra', 'maharashtra') THEN 'maharashtra'
+    WHEN LOWER(TRIM(${expression})) IN ('nct of delhi', 'delhi') THEN 'delhi'
+    WHEN LOWER(TRIM(${expression})) IN ('jammu & kashmir', 'jammu and kashmir') THEN 'jammu and kashmir'
+    WHEN LOWER(TRIM(${expression})) IN ('andaman & nicobar islands', 'andaman and nicobar islands') THEN 'andaman and nicobar islands'
+    ELSE REPLACE(LOWER(TRIM(${expression})), '&', 'and')
+  END
+`;
+
 const GapQuery = z.object({
   level: z.enum(['state', 'district']).optional().default('state'),
   state: z.string().trim().max(120).optional().default(''),
@@ -61,9 +77,8 @@ const buildHealthGeo = (level: 'state' | 'district') => {
 };
 
 const buildFacilityGeo = (level: 'state' | 'district') => {
-  const geographyName = level === 'state'
-    ? `TRIM(NULLIF(address_state_or_region, 'null'))`
-    : `TRIM(NULLIF(address_city, 'null'))`;
+  const geographyName =
+    level === 'state' ? `TRIM(NULLIF(address_state_or_region, 'null'))` : `TRIM(NULLIF(address_city, 'null'))`;
 
   return `
     SELECT
@@ -92,6 +107,59 @@ const buildFacilityGeo = (level: 'state' | 'district') => {
   `;
 };
 
+const buildPincodeGeo = (level: 'state' | 'district') => {
+  const geographyName = level === 'state' ? `TRIM(NULLIF(statename, 'null'))` : `TRIM(NULLIF(district, 'null'))`;
+
+  return `
+    SELECT
+      ${geographyName} AS geography_name,
+      TRIM(NULLIF(statename, 'null')) AS state_name,
+      COUNT(DISTINCT pincode)::float AS pincode_count,
+      COUNT(*)::float AS post_office_count,
+      COUNT(*) FILTER (WHERE NULLIF(officetype, 'null') = 'BO')::float AS branch_office_count,
+      COUNT(*) FILTER (WHERE NULLIF(delivery, 'null') = 'Delivery')::float AS delivery_office_count,
+      COUNT(*) FILTER (WHERE latitude_num IS NOT NULL AND longitude_num IS NOT NULL)::float AS geocoded_pincode_count,
+      AVG(latitude_num)::float AS centroid_latitude,
+      AVG(longitude_num)::float AS centroid_longitude
+    FROM (
+      SELECT
+        *,
+        CASE
+          WHEN latitude_raw BETWEEN 6 AND 38 AND longitude_raw BETWEEN 68 AND 98 THEN latitude_raw
+        END AS latitude_num,
+        CASE
+          WHEN latitude_raw BETWEEN 6 AND 38 AND longitude_raw BETWEEN 68 AND 98 THEN longitude_raw
+        END AS longitude_num
+      FROM (
+        SELECT
+          *,
+          ${coordinateColumn('latitude')} AS latitude_raw,
+          ${coordinateColumn('longitude')} AS longitude_raw
+        FROM public.pincode_directory
+      ) raw_pincodes
+    ) p
+    WHERE ${geographyName} IS NOT NULL
+    GROUP BY 1, 2
+  `;
+};
+
+const buildHospitalPoints = () => `
+  SELECT
+    state_name,
+    latitude,
+    longitude
+  FROM (
+    SELECT
+      TRIM(NULLIF(address_state_or_region, 'null')) AS state_name,
+      ${coordinateColumn('latitude')} AS latitude,
+      ${coordinateColumn('longitude')} AS longitude
+    FROM public.facilities
+    WHERE NULLIF(facility_type_id, 'null') = 'hospital'
+  ) coordinates
+  WHERE latitude BETWEEN 6 AND 38
+    AND longitude BETWEEN 68 AND 98
+`;
+
 export function setupGapRoutes(appkit: AppKitWithLakebase) {
   appkit.server.extend((app) => {
     app.get('/api/gaps/regions', async (req, res) => {
@@ -119,10 +187,11 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
       filters.push(`scored.confidence_score >= $${params.length}`);
 
       const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
-      const joinCondition = level === 'state'
-        ? `LOWER(TRIM(h.geography_name)) = LOWER(TRIM(f.geography_name))`
-        : `LOWER(TRIM(h.geography_name)) = LOWER(TRIM(f.geography_name))
-          AND LOWER(TRIM(h.state_name)) = LOWER(TRIM(f.state_name))`;
+      const joinCondition =
+        level === 'state'
+          ? `${normalizedGeo('h.geography_name')} = ${normalizedGeo('f.geography_name')}`
+          : `${normalizedGeo('h.geography_name')} = ${normalizedGeo('f.geography_name')}
+          AND ${normalizedGeo('h.state_name')} = ${normalizedGeo('f.state_name')}`;
 
       try {
         const result = await appkit.lakebase.query(
@@ -133,6 +202,33 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
             facility_geo AS (
               ${buildFacilityGeo(level)}
             ),
+            pincode_geo AS (
+              ${buildPincodeGeo(level)}
+            ),
+            hospital_points AS (
+              ${buildHospitalPoints()}
+            ),
+            pincode_access AS (
+              SELECT
+                p.*,
+                nearest.nearest_hospital_km
+              FROM pincode_geo p
+              LEFT JOIN LATERAL (
+                SELECT
+                  MIN(
+                    6371 * 2 * ASIN(LEAST(1, SQRT(
+                      POWER(SIN(RADIANS((hp.latitude - p.centroid_latitude) / 2)), 2)
+                      + COS(RADIANS(p.centroid_latitude))
+                      * COS(RADIANS(hp.latitude))
+                      * POWER(SIN(RADIANS((hp.longitude - p.centroid_longitude) / 2)), 2)
+                    )))
+                  )::float AS nearest_hospital_km
+                FROM hospital_points hp
+                WHERE ${normalizedGeo('hp.state_name')} = ${normalizedGeo('p.state_name')}
+                  AND p.centroid_latitude IS NOT NULL
+                  AND p.centroid_longitude IS NOT NULL
+              ) nearest ON TRUE
+            ),
             joined AS (
               SELECT
                 h.*,
@@ -141,9 +237,21 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
                 COALESCE(f.clinic_count, 0)::float AS clinic_count,
                 COALESCE(f.geocoded_count, 0)::float AS geocoded_count,
                 COALESCE(f.contactable_count, 0)::float AS contactable_count,
-                COALESCE(f.described_count, 0)::float AS described_count
+                COALESCE(f.described_count, 0)::float AS described_count,
+                COALESCE(p.pincode_count, 0)::float AS pincode_count,
+                COALESCE(p.post_office_count, 0)::float AS post_office_count,
+                COALESCE(p.branch_office_count, 0)::float AS branch_office_count,
+                COALESCE(p.delivery_office_count, 0)::float AS delivery_office_count,
+                COALESCE(p.geocoded_pincode_count, 0)::float AS geocoded_pincode_count,
+                p.nearest_hospital_km
               FROM health_geo h
               LEFT JOIN facility_geo f ON ${joinCondition}
+              LEFT JOIN pincode_access p ON ${
+                level === 'state'
+                  ? `${normalizedGeo('h.geography_name')} = ${normalizedGeo('p.geography_name')}`
+                  : `${normalizedGeo('h.geography_name')} = ${normalizedGeo('p.geography_name')}
+                  AND ${normalizedGeo('h.state_name')} = ${normalizedGeo('p.state_name')}`
+              }
             ),
             scored AS (
               SELECT
@@ -187,10 +295,19 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
                   ) / GREATEST(households_surveyed / 10000.0, 1)
                 )) * 32)::float AS supply_adequacy_score,
                 LEAST(100,
+                  LEAST(40, COALESCE(nearest_hospital_km, 80) * 0.7)
+                  + LEAST(35, (pincode_count / GREATEST(facility_count, 1)) * 1.8)
+                  + LEAST(15, (branch_office_count / GREATEST(post_office_count, 1)) * 15)
+                  + LEAST(10, (1 - (geocoded_pincode_count / GREATEST(post_office_count, 1))) * 10)
+                )::float AS geographic_access_score,
+                (facility_count / GREATEST(pincode_count, 1) * 100)::float AS facilities_per_100_pincodes,
+                LEAST(100,
                   25
                   + LEAST(35, households_surveyed / 450.0)
                   + LEAST(15, women_interviewed / 350.0)
-                  + LEAST(25, facility_count * 2.5)
+                  + LEAST(15, facility_count * 2.0)
+                  + LEAST(10, pincode_count * 0.75)
+                  + LEAST(10, geocoded_pincode_count * 0.25)
                 )::float AS confidence_score
               FROM joined
             )
@@ -213,15 +330,27 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
               ROUND(geocoded_count::numeric, 0)::int AS geocoded_count,
               ROUND(contactable_count::numeric, 0)::int AS contactable_count,
               ROUND(described_count::numeric, 0)::int AS described_count,
+              ROUND(pincode_count::numeric, 0)::int AS pincode_count,
+              ROUND(post_office_count::numeric, 0)::int AS post_office_count,
+              ROUND(branch_office_count::numeric, 0)::int AS branch_office_count,
+              ROUND(delivery_office_count::numeric, 0)::int AS delivery_office_count,
+              ROUND(geocoded_pincode_count::numeric, 0)::int AS geocoded_pincode_count,
+              ROUND(nearest_hospital_km::numeric, 1)::float AS nearest_hospital_km,
               ROUND(need_score::numeric, 1)::float AS need_score,
               ROUND(facility_evidence_score::numeric, 1)::float AS facility_evidence_score,
               ROUND(facility_evidence_per_10k_households::numeric, 2)::float AS facility_evidence_per_10k_households,
               ROUND(supply_adequacy_score::numeric, 1)::float AS supply_adequacy_score,
-              ROUND((need_score * (1 - LEAST(supply_adequacy_score, 95) / 115.0))::numeric, 1)::float AS gap_score,
+              ROUND(geographic_access_score::numeric, 1)::float AS geographic_access_score,
+              ROUND(facilities_per_100_pincodes::numeric, 2)::float AS facilities_per_100_pincodes,
+              ROUND(LEAST(100, (
+                need_score * (1 - LEAST(supply_adequacy_score, 95) / 115.0)
+                + geographic_access_score * 0.3
+              ))::numeric, 1)::float AS gap_score,
               ROUND(confidence_score::numeric, 1)::float AS confidence_score,
               CASE
                 WHEN confidence_score < 50 THEN 'Data-poor'
-                WHEN need_score >= 45 AND supply_adequacy_score < 30 THEN 'Likely real gap'
+                WHEN need_score >= 45 AND supply_adequacy_score < 30 AND geographic_access_score >= 35 THEN 'Likely real gap'
+                WHEN need_score >= 45 AND geographic_access_score >= 45 THEN 'High need, remote access'
                 WHEN need_score >= 45 THEN 'High need, some evidence'
                 WHEN supply_adequacy_score < 20 THEN 'Sparse facility evidence'
                 ELSE 'Lower priority'
@@ -239,7 +368,7 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
               geography_name
             LIMIT 80
           `,
-          params,
+          params
         );
 
         res.json(result.rows);

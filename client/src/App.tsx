@@ -9,6 +9,7 @@ import {
   Gauge,
   Globe,
   HeartPulse,
+  Info,
   Layers,
   MapPin,
   Phone,
@@ -108,10 +109,18 @@ interface GapRegion {
   geocoded_count: number;
   contactable_count: number;
   described_count: number;
+  pincode_count: number;
+  post_office_count: number;
+  branch_office_count: number;
+  delivery_office_count: number;
+  geocoded_pincode_count: number;
+  nearest_hospital_km: number | null;
   need_score: number;
   facility_evidence_score: number;
   facility_evidence_per_10k_households: number;
   supply_adequacy_score: number;
+  geographic_access_score: number;
+  facilities_per_100_pincodes: number;
   gap_score: number;
   confidence_score: number;
   evidence_label: string;
@@ -127,6 +136,20 @@ const sortOptions = [
 ];
 
 type ActiveTab = 'gaps' | 'health' | 'facilities';
+type ScoreMetricLabel = 'Gap score' | 'Need' | 'Supply adequacy' | 'Access pressure' | 'Confidence';
+
+const metricDescriptions: Record<ScoreMetricLabel, string> = {
+  'Gap score':
+    'Overall priority score from health need, reduced by supply adequacy, plus 30% of access pressure. Higher means a stronger likely care gap.',
+  Need:
+    'Average burden score from anaemia, child stunting, high blood pressure, and gaps in sanitation, insurance, and institutional births. Higher means greater health need.',
+  'Supply adequacy':
+    'Log-scaled facility evidence per 10k surveyed households. Hospitals count most, clinics partially, and mapped, contactable, described facilities add trust signals. Higher means stronger supply.',
+  'Access pressure':
+    'Geographic access strain from distance to the nearest hospital, pincodes per facility, branch-office share, and unmapped pincode coverage. Higher means harder access.',
+  Confidence:
+    'Data support score from surveyed households, women interviewed, facility count, pincode coverage, and mapped pincodes. Higher means the gap classification is better supported.',
+};
 
 const formatPct = (value: number | string | null | undefined) => {
   const numeric = Number(value);
@@ -141,6 +164,11 @@ const formatCount = (value: number | string | null | undefined) => {
 const formatScore = (value: number | string | null | undefined) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toFixed(1) : 'n/a';
+};
+
+const formatKm = (value: number | string | null | undefined) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${numeric.toFixed(1)} km` : 'n/a';
 };
 
 const normalizeText = (value: string | null | undefined, fallback = 'n/a') => {
@@ -533,6 +561,8 @@ export default function App() {
                 <p className="leading-6 text-[#0B2026]/65">
                   Need combines anaemia, sanitation, insurance, institutional births, child stunting, and high blood
                   pressure. Supply is down-weighted when facilities lack type, location, contact, or service details.
+                  Pincode coverage adds geographic access pressure from remote post-office areas and distance to the
+                  nearest hospital.
                 </p>
               </CardContent>
             </Card>
@@ -879,7 +909,7 @@ function GapCard({ gap }: { gap: GapRegion }) {
     <Card className="rounded-md border-[#0B2026]/10 bg-white shadow-sm">
       <CardContent className="p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0 space-y-3">
+          <div className="min-w-0 space-y-3 lg:flex-1">
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-lg font-semibold">{gap.geography_name}</h3>
@@ -894,10 +924,11 @@ function GapCard({ gap }: { gap: GapRegion }) {
               </p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
               <ScoreBar label="Gap score" value={gap.gap_score} tone="red" />
               <ScoreBar label="Need" value={gap.need_score} tone="dark" />
               <ScoreBar label="Supply adequacy" value={gap.supply_adequacy_score} tone="green" />
+              <ScoreBar label="Access pressure" value={gap.geographic_access_score} tone="blue" />
               <ScoreBar label="Confidence" value={gap.confidence_score} tone="blue" />
             </div>
           </div>
@@ -912,9 +943,14 @@ function GapCard({ gap }: { gap: GapRegion }) {
               value={`${formatScore(gap.facility_evidence_per_10k_households)} per 10k surveyed households`}
             />
             <MiniStat
+              label="Pincode access"
+              value={`${formatCount(gap.pincode_count)} pincodes, ${formatScore(gap.facilities_per_100_pincodes)} facilities per 100`}
+            />
+            <MiniStat
               label="Facility trust signals"
               value={`${formatCount(gap.geocoded_count)} mapped, ${formatCount(gap.contactable_count)} contactable`}
             />
+            <MiniStat label="Nearest hospital" value={formatKm(gap.nearest_hospital_km)} />
             <MiniStat
               label="Survey support"
               value={`${formatCount(gap.households_surveyed)} households, ${formatCount(gap.women_interviewed)} women`}
@@ -929,6 +965,10 @@ function GapCard({ gap }: { gap: GapRegion }) {
           <MiniStat label="Institutional births" value={formatPct(gap.institutional_birth_pct)} />
           <MiniStat label="Child stunting" value={formatPct(gap.stunting_pct)} />
           <MiniStat label="High BP, women" value={formatPct(gap.high_bp_women_pct)} />
+          <MiniStat
+            label="Mapped pincodes"
+            value={`${formatCount(gap.geocoded_pincode_count)} of ${formatCount(gap.post_office_count)}`}
+          />
         </div>
       </CardContent>
     </Card>
@@ -950,7 +990,37 @@ function ConfidenceBadge({ label }: { label: GapRegion['confidence_label'] }) {
   );
 }
 
-function ScoreBar({ label, value, tone }: { label: string; value: number; tone: 'red' | 'green' | 'blue' | 'dark' }) {
+function MetricInfo({ label, description }: { label: string; description: string }) {
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        data-metric-info
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[#0B2026]/45 transition-colors hover:bg-[#0B2026]/6 hover:text-[#0B2026] focus:outline-none focus:ring-2 focus:ring-[#0B2026]/25"
+        aria-label={`${label}: ${description}`}
+        title={description}
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 top-6 z-20 hidden w-72 max-w-[calc(100vw-3rem)] -translate-x-1/2 rounded-md border border-[#0B2026]/10 bg-[#0B2026] px-3 py-2 text-left text-xs font-normal leading-5 text-white shadow-lg group-focus-within:block group-hover:block"
+      >
+        {description}
+      </span>
+    </span>
+  );
+}
+
+function ScoreBar({
+  label,
+  value,
+  tone,
+}: {
+  label: ScoreMetricLabel;
+  value: number;
+  tone: 'red' | 'green' | 'blue' | 'dark';
+}) {
   const toneClass = {
     red: 'bg-[#FF3621]',
     green: 'bg-emerald-600',
@@ -960,10 +1030,17 @@ function ScoreBar({ label, value, tone }: { label: string; value: number; tone: 
   const width = `${Math.max(0, Math.min(100, Number(value) || 0))}%`;
 
   return (
-    <div className="rounded-md border border-[#0B2026]/10 p-3">
-      <div className="flex items-center justify-between gap-2 text-sm">
-        <span className="text-[#0B2026]/65">{label}</span>
-        <span className="font-semibold">{formatScore(value)}</span>
+    <div className="rounded-md border border-[#0B2026]/10 p-3" data-score-bar>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-sm">
+        <span className="flex min-w-0 items-center gap-1.5 text-[#0B2026]/65">
+          <span className="truncate" data-score-label>
+            {label}
+          </span>
+          <MetricInfo label={label} description={metricDescriptions[label]} />
+        </span>
+        <span className="min-w-10 text-right font-semibold" data-score-value>
+          {formatScore(value)}
+        </span>
       </div>
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#0B2026]/10">
         <div className={`h-full rounded-full ${toneClass}`} style={{ width }} />
