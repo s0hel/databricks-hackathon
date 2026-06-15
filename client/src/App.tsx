@@ -1060,18 +1060,18 @@ function GapHeatMap({
           <rect width="100" height="100" fill="url(#map-water)" />
           {INDIA_BOUNDARY_PATHS.map((path) => (
             <path
-              key={path}
+              key={`fill-${path}`}
               d={path}
               fill="#F7F5EF"
               stroke="#0B2026"
-              strokeOpacity="0.26"
-              strokeWidth="0.32"
+              strokeOpacity="0.14"
+              strokeWidth="0.24"
               vectorEffect="non-scaling-stroke"
             />
           ))}
 
           {plotted.map(({ gap, value, x, y }) => {
-            const radius = 3.5 + Math.max(0, Math.min(100, value)) * 0.08;
+            const radius = 2.2 + Math.max(0, Math.min(100, value)) * 0.045;
             const selected = selectedKey === gap.geography_key;
 
             return (
@@ -1079,7 +1079,7 @@ function GapHeatMap({
                 <circle
                   cx={x}
                   cy={y}
-                  r={radius * 1.9}
+                  r={radius * 2.15}
                   fill={metric === 'gap' ? 'url(#heat-red)' : 'url(#heat-blue)'}
                   className="pointer-events-none"
                 />
@@ -1106,6 +1106,19 @@ function GapHeatMap({
               </g>
             );
           })}
+
+          {INDIA_BOUNDARY_PATHS.map((path) => (
+            <path
+              key={`stroke-${path}`}
+              d={path}
+              fill="none"
+              stroke="#0B2026"
+              strokeOpacity="0.34"
+              strokeWidth="0.34"
+              vectorEffect="non-scaling-stroke"
+              className="pointer-events-none"
+            />
+          ))}
         </svg>
 
         <div className="absolute bottom-3 left-3 rounded-md border border-[#0B2026]/10 bg-white/95 px-3 py-2 text-xs shadow-sm">
