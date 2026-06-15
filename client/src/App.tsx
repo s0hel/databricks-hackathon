@@ -3,16 +3,20 @@ import {
   Activity,
   AlertCircle,
   Building2,
+  CheckCircle2,
   Database,
   Droplets,
+  Gauge,
   Globe,
   HeartPulse,
+  Layers,
   MapPin,
   Phone,
   Search,
   ShieldCheck,
   Sparkles,
   Stethoscope,
+  Target,
 } from 'lucide-react';
 import {
   Button,
@@ -93,6 +97,35 @@ interface Facility {
   longitude: string | null;
 }
 
+interface GapRegion {
+  geography_key: string;
+  geography_name: string;
+  state_name: string;
+  district_count: number;
+  households_surveyed: number;
+  women_interviewed: number;
+  anaemia_pct: number;
+  sanitation_pct: number;
+  insurance_pct: number;
+  institutional_birth_pct: number;
+  stunting_pct: number;
+  high_bp_women_pct: number;
+  facility_count: number;
+  hospital_count: number;
+  clinic_count: number;
+  geocoded_count: number;
+  contactable_count: number;
+  described_count: number;
+  need_score: number;
+  facility_evidence_score: number;
+  facility_evidence_per_10k_households: number;
+  supply_adequacy_score: number;
+  gap_score: number;
+  confidence_score: number;
+  evidence_label: string;
+  confidence_label: 'High' | 'Medium' | 'Low';
+}
+
 const sortOptions = [
   { value: 'anaemia', label: 'Anaemia' },
   { value: 'sanitation', label: 'Sanitation' },
@@ -109,6 +142,11 @@ const formatPct = (value: number | string | null | undefined) => {
 const formatCount = (value: number | string | null | undefined) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? new Intl.NumberFormat('en-US').format(numeric) : 'n/a';
+};
+
+const formatScore = (value: number | string | null | undefined) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(1) : 'n/a';
 };
 
 const normalizeText = (value: string | null | undefined, fallback = 'n/a') => {
@@ -163,13 +201,21 @@ export default function App() {
   const [districtsLoading, setDistrictsLoading] = useState(true);
   const [healthError, setHealthError] = useState<string | null>(null);
 
+  const [gaps, setGaps] = useState<GapRegion[]>([]);
+  const [gapLevel, setGapLevel] = useState<'state' | 'district'>('state');
+  const [gapQuery, setGapQuery] = useState('');
+  const [gapState, setGapState] = useState('');
+  const [minConfidence, setMinConfidence] = useState('0');
+  const [gapLoading, setGapLoading] = useState(true);
+  const [gapError, setGapError] = useState<string | null>(null);
+
   const [facilityOverview, setFacilityOverview] = useState<FacilityOverview | null>(null);
   const [facilityOptions, setFacilityOptions] = useState<FacilityOptions>({ states: [], types: [] });
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [facilityQuery, setFacilityQuery] = useState('');
   const [facilityState, setFacilityState] = useState('');
   const [facilityType, setFacilityType] = useState('');
-  const [facilityLoading, setFacilityLoading] = useState(true);
+  const [, setFacilityLoading] = useState(true);
   const [facilitiesLoading, setFacilitiesLoading] = useState(true);
   const [facilityError, setFacilityError] = useState<string | null>(null);
 
@@ -198,6 +244,34 @@ export default function App() {
       .catch((err) => setFacilityError(err instanceof Error ? err.message : 'Failed to load facility data'))
       .finally(() => setFacilityLoading(false));
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams();
+    params.set('level', gapLevel);
+    params.set('minConfidence', minConfidence);
+    if (gapQuery.trim()) params.set('q', gapQuery.trim());
+    if (gapState) params.set('state', gapState);
+
+    async function loadGaps() {
+      setGapLoading(true);
+      try {
+        const response = await fetch(`/api/gaps/regions?${params.toString()}`, { signal: controller.signal });
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        const nextGaps = (await response.json()) as GapRegion[];
+        setGaps(nextGaps);
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        setGapError(err instanceof Error ? err.message : 'Failed to load care gaps');
+      } finally {
+        setGapLoading(false);
+      }
+    }
+
+    void loadGaps();
+
+    return () => controller.abort();
+  }, [gapLevel, gapQuery, gapState, minConfidence]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -263,6 +337,19 @@ export default function App() {
     return facilityOptions.states.find((item) => item.value === facilityState)?.facility_count ?? 0;
   }, [facilityOverview?.facility_count, facilityOptions.states, facilityState]);
 
+  const gapSummary = useMemo(() => {
+    const realGaps = gaps.filter((gap) => gap.evidence_label === 'Likely real gap');
+    const dataPoor = gaps.filter((gap) => gap.evidence_label === 'Data-poor');
+    const topGap = gaps[0];
+
+    return {
+      realGapCount: realGaps.length,
+      dataPoorCount: dataPoor.length,
+      topGap,
+      highConfidenceCount: gaps.filter((gap) => gap.confidence_label === 'High').length,
+    };
+  }, [gaps]);
+
   return (
     <main className="min-h-screen bg-[#F9F7F4] text-[#0B2026]">
       <section className="border-b border-[#0B2026]/10 bg-[#EEEDE9]">
@@ -274,10 +361,10 @@ export default function App() {
                 Lakebase synced datasets
               </div>
               <h1 className="text-3xl font-bold tracking-normal md:text-5xl">
-                Hackathon health and facility explorer
+                Care gap confidence planner
               </h1>
               <p className="max-w-2xl text-base leading-7 text-[#0B2026]/70">
-                District-level NFHS-5 indicators and a deduplicated healthcare facility directory served from Unity Catalog snapshots synced into Lakebase Postgres for low-latency application reads.
+                Trust-weighted facility evidence and district health burden combined by geography, so planners can separate likely gaps in care from places where the data is too thin to call.
               </p>
             </div>
             <div className="flex items-center gap-3 rounded-md border border-[#0B2026]/15 bg-white px-4 py-3 text-sm shadow-sm">
@@ -294,6 +381,9 @@ export default function App() {
           )}
           {facilityError && facilityError !== healthError && (
             <InlineError message={facilityError} />
+          )}
+          {gapError && gapError !== healthError && gapError !== facilityError && (
+            <InlineError message={gapError} />
           )}
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
@@ -322,22 +412,150 @@ export default function App() {
               detail="Women ages 15-49"
             />
             <MetricCard
-              icon={<Stethoscope className="h-5 w-5" />}
-              label="Facilities"
-              value={facilityLoading ? null : formatCount(facilityOverview?.facility_count)}
-              detail={`${formatCount(facilityOverview?.state_count)} states in directory`}
+              icon={<Target className="h-5 w-5" />}
+              label="Likely real gaps"
+              value={gapLoading ? null : formatCount(gapSummary.realGapCount)}
+              detail="High need with sparse supply"
             />
             <MetricCard
-              icon={<MapPin className="h-5 w-5" />}
-              label="Hospitals / clinics"
-              value={facilityLoading ? null : `${formatCount(facilityOverview?.hospital_count)} / ${formatCount(facilityOverview?.clinic_count)}`}
-              detail="Top facility types"
+              icon={<Gauge className="h-5 w-5" />}
+              label="High-confidence regions"
+              value={gapLoading ? null : formatCount(gapSummary.highConfidenceCount)}
+              detail={`${formatCount(gapSummary.dataPoorCount)} data-poor in current rank`}
             />
           </div>
         </div>
       </section>
 
       <section className="mx-auto grid max-w-7xl gap-5 px-5 py-6 md:px-8 lg:grid-cols-[320px_1fr]">
+        <aside className="space-y-4">
+          <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-base">Gap controls</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <label className="block space-y-2 text-sm font-medium">
+                <span>Geography</span>
+                <select
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={gapLevel}
+                  onChange={(event) => setGapLevel(event.target.value as 'state' | 'district')}
+                >
+                  <option value="state">State</option>
+                  <option value="district">District</option>
+                </select>
+              </label>
+
+              <label className="block space-y-2 text-sm font-medium">
+                <span>State or region</span>
+                <select
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={gapState}
+                  onChange={(event) => setGapState(event.target.value)}
+                >
+                  <option value="">All states</option>
+                  {states.map((option) => (
+                    <option key={option.state_ut} value={option.state_ut}>
+                      {option.state_ut}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block space-y-2 text-sm font-medium">
+                <span>Search geography</span>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#0B2026]/45" />
+                  <Input
+                    className="pl-9"
+                    value={gapQuery}
+                    onChange={(event) => setGapQuery(event.target.value)}
+                    placeholder="Search locations"
+                  />
+                </div>
+              </label>
+
+              <label className="block space-y-2 text-sm font-medium">
+                <span>Minimum confidence</span>
+                <select
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={minConfidence}
+                  onChange={(event) => setMinConfidence(event.target.value)}
+                >
+                  <option value="0">Any confidence</option>
+                  <option value="50">Medium or high</option>
+                  <option value="75">High confidence</option>
+                </select>
+              </label>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setGapLevel('state');
+                  setGapState('');
+                  setGapQuery('');
+                  setMinConfidence('0');
+                }}
+              >
+                Reset gap controls
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
+            <CardContent className="space-y-3 pt-6 text-sm">
+              <div className="flex items-center gap-2 font-semibold">
+                <Layers className="h-4 w-4 text-[#FF3621]" />
+                Evidence model
+              </div>
+              <p className="leading-6 text-[#0B2026]/65">
+                Need combines anaemia, sanitation, insurance, institutional births, child stunting, and high blood pressure. Supply is down-weighted when facilities lack type, location, contact, or service details.
+              </p>
+            </CardContent>
+          </Card>
+        </aside>
+
+        <div className="space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold">Highest-risk gaps in care</h2>
+              <p className="text-sm text-[#0B2026]/65">
+                Ranked by high health burden, low trust-weighted facility evidence, and filtered by confidence.
+              </p>
+            </div>
+            <div className="rounded-md border border-[#0B2026]/10 bg-white px-4 py-3 text-sm shadow-sm">
+              <div className="text-xs text-[#0B2026]/55">Current top gap</div>
+              <div className="font-semibold">
+                {gapLoading ? 'Loading' : gapSummary.topGap ? gapSummary.topGap.geography_name : 'No match'}
+              </div>
+            </div>
+          </div>
+
+          {gapLoading ? (
+            <div className="grid gap-3">
+              {Array.from({ length: 6 }, (_, index) => (
+                <Skeleton key={index} className="h-44 rounded-md" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {gaps.map((gap) => (
+                <GapCard key={gap.geography_key} gap={gap} />
+              ))}
+              {gaps.length === 0 && (
+                <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
+                  No regions match the current confidence and geography filters.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="border-t border-[#0B2026]/10 bg-white">
+        <div className="mx-auto grid max-w-7xl gap-5 px-5 py-6 md:px-8 lg:grid-cols-[320px_1fr]">
         <aside className="space-y-4">
           <Card className="rounded-md border-[#0B2026]/10 shadow-sm">
             <CardHeader>
@@ -444,6 +662,7 @@ export default function App() {
               )}
             </div>
           )}
+        </div>
         </div>
       </section>
 
@@ -596,6 +815,100 @@ function MetricCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function GapCard({ gap }: { gap: GapRegion }) {
+  return (
+    <Card className="rounded-md border-[#0B2026]/10 bg-white shadow-sm">
+      <CardContent className="p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 space-y-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-lg font-semibold">{gap.geography_name}</h3>
+                <ConfidenceBadge label={gap.confidence_label} />
+                <span className="rounded-md bg-[#0B2026]/6 px-2.5 py-1 text-xs font-medium text-[#0B2026]">
+                  {gap.evidence_label}
+                </span>
+              </div>
+              <p className="text-sm text-[#0B2026]/65">
+                {gap.state_name}
+                {gap.district_count > 1 ? `, ${formatCount(gap.district_count)} districts` : ''}
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <ScoreBar label="Gap score" value={gap.gap_score} tone="red" />
+              <ScoreBar label="Need" value={gap.need_score} tone="dark" />
+              <ScoreBar label="Supply adequacy" value={gap.supply_adequacy_score} tone="green" />
+              <ScoreBar label="Confidence" value={gap.confidence_score} tone="blue" />
+            </div>
+          </div>
+
+          <div className="grid gap-2 text-sm sm:grid-cols-2 lg:min-w-[300px] lg:grid-cols-1">
+            <MiniStat label="Facilities" value={`${formatCount(gap.facility_count)} total, ${formatCount(gap.hospital_count)} hospitals`} />
+            <MiniStat label="Evidence density" value={`${formatScore(gap.facility_evidence_per_10k_households)} per 10k surveyed households`} />
+            <MiniStat label="Facility trust signals" value={`${formatCount(gap.geocoded_count)} mapped, ${formatCount(gap.contactable_count)} contactable`} />
+            <MiniStat label="Survey support" value={`${formatCount(gap.households_surveyed)} households, ${formatCount(gap.women_interviewed)} women`} />
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2 border-t border-[#0B2026]/10 pt-4 text-sm sm:grid-cols-2 lg:grid-cols-6">
+          <MiniStat label="Anaemia" value={formatPct(gap.anaemia_pct)} />
+          <MiniStat label="Sanitation" value={formatPct(gap.sanitation_pct)} />
+          <MiniStat label="Insurance" value={formatPct(gap.insurance_pct)} />
+          <MiniStat label="Institutional births" value={formatPct(gap.institutional_birth_pct)} />
+          <MiniStat label="Child stunting" value={formatPct(gap.stunting_pct)} />
+          <MiniStat label="High BP, women" value={formatPct(gap.high_bp_women_pct)} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ConfidenceBadge({ label }: { label: GapRegion['confidence_label'] }) {
+  const toneClass = {
+    High: 'bg-emerald-50 text-emerald-800',
+    Medium: 'bg-amber-50 text-amber-800',
+    Low: 'bg-[#FF3621]/10 text-[#8A1F13]',
+  }[label];
+
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${toneClass}`}>
+      <CheckCircle2 className="h-3.5 w-3.5" />
+      {label} confidence
+    </span>
+  );
+}
+
+function ScoreBar({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'red' | 'green' | 'blue' | 'dark';
+}) {
+  const toneClass = {
+    red: 'bg-[#FF3621]',
+    green: 'bg-emerald-600',
+    blue: 'bg-sky-600',
+    dark: 'bg-[#0B2026]',
+  }[tone];
+  const width = `${Math.max(0, Math.min(100, Number(value) || 0))}%`;
+
+  return (
+    <div className="rounded-md border border-[#0B2026]/10 p-3">
+      <div className="flex items-center justify-between gap-2 text-sm">
+        <span className="text-[#0B2026]/65">{label}</span>
+        <span className="font-semibold">{formatScore(value)}</span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#0B2026]/10">
+        <div className={`h-full rounded-full ${toneClass}`} style={{ width }} />
+      </div>
+    </div>
   );
 }
 

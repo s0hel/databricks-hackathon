@@ -25,7 +25,7 @@ const PLUGIN_PAGES: Record<string, PluginPage> = {
   lakebase: {
     navLabel: 'Health indicators',
     path: '/',
-    expectedTexts: ['Hackathon health and facility explorer', 'District results', 'Facility search'],
+    expectedTexts: ['Care gap confidence planner', 'Highest-risk gaps in care', 'District results', 'Facility search'],
   },
   genie: {
     navLabel: 'Genie',
@@ -50,9 +50,10 @@ test('smoke test - app loads and displays home page', async ({ page }) => {
   await page.goto('/');
 
   await expect(
-    page.getByRole('heading', { name: 'Hackathon health and facility explorer' }),
+    page.getByRole('heading', { name: 'Care gap confidence planner' }),
   ).toBeVisible();
   await expect(page.getByText('Lakebase synced datasets')).toBeVisible();
+  await expect(page.getByText('Highest-risk gaps in care')).toBeVisible();
   await expect(page.getByText('District results')).toBeVisible();
   await expect(page.getByText('Facility search')).toBeVisible();
 });
