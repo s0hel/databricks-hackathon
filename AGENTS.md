@@ -17,4 +17,4 @@ databricks aitools install
 ```
 <!-- appkit-instructions-end -->
 
-Playwright is already installed, so dont try to install it again.
+Playwright is already installed, so dont try to install it again. I prefer to skip this step and just run the tests. If you encounter any issues related to Playwright, you can address them at that time.

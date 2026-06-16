@@ -215,6 +215,13 @@ interface GapRegion {
   confidence_score: number;
   evidence_label: string;
   confidence_label: 'High' | 'Medium' | 'Low';
+  confidence_factors: ConfidenceFactor[];
+}
+
+interface ConfidenceFactor {
+  label: string;
+  severity: 'high' | 'medium';
+  detail: string;
 }
 
 const sortOptions = [
@@ -359,6 +366,11 @@ const sourceLabel = (source: CapabilityEvidence['source']) =>
 
 const capabilityTrustDescription =
   'Capability trust score is an evidence-weighted total. Capability field matches add 3 points, specialties and facility type add 2, and description or doctors add 1. The current maximum is 9 if all five fields support the same capability. Strong evidence requires a capability claim plus support, two structured sources, or 5+ points; partial evidence usually means one structured source or 3+ points; narrative-only evidence is weak.';
+
+const confidenceFactorTone: Record<ConfidenceFactor['severity'], string> = {
+  high: 'border-[#FF3621]/25 bg-[#FF3621]/10 text-[#8A1F13]',
+  medium: 'border-amber-500/30 bg-amber-50 text-amber-900',
+};
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -1671,6 +1683,8 @@ function GapCard({ gap, selected = false }: { gap: GapRegion; selected?: boolean
           </div>
         </div>
 
+        <ConfidenceFactors factors={gap.confidence_factors} />
+
         <div className="mt-4 grid gap-2 border-t border-[#0B2026]/10 pt-4 text-sm sm:grid-cols-2 lg:grid-cols-6">
           <MiniStat label="Anaemia" value={formatPct(gap.anaemia_pct)} />
           <MiniStat label="Sanitation" value={formatPct(gap.sanitation_pct)} />
@@ -1685,6 +1699,43 @@ function GapCard({ gap, selected = false }: { gap: GapRegion; selected?: boolean
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function ConfidenceFactors({ factors }: { factors: ConfidenceFactor[] | null | undefined }) {
+  const visibleFactors = factors?.slice(0, 4) ?? [];
+
+  if (visibleFactors.length === 0) {
+    return (
+      <div className="mt-4 rounded-md border border-emerald-700/15 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+        No major data quality factor is lowering this confidence score.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+        <AlertCircle className="h-4 w-4 text-[#FF3621]" />
+        Confidence factors
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {visibleFactors.map((factor) => (
+          <div
+            key={`${factor.label}-${factor.detail}`}
+            className={`rounded-md border px-3 py-2 text-sm ${confidenceFactorTone[factor.severity]}`}
+          >
+            <div className="font-semibold">{factor.label}</div>
+            <div className="mt-0.5 text-xs opacity-80">{factor.detail}</div>
+          </div>
+        ))}
+      </div>
+      {factors && factors.length > visibleFactors.length && (
+        <div className="mt-2 text-xs text-[#0B2026]/55">
+          {formatCount(factors.length - visibleFactors.length)} more confidence factors not shown.
+        </div>
+      )}
+    </div>
   );
 }
 

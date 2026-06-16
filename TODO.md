@@ -46,7 +46,7 @@
 
 - [x] Existing app ranks care gaps by health need, supply adequacy, access pressure, and confidence.
 - [x] Existing gap model now uses normalized facility geography.
-- [ ] Add drill-down explanations for which data quality factors lowered confidence.
+- [x] Add drill-down explanations for which data quality factors lowered confidence.
 - [ ] Add filters for capability-specific gaps after use case 1 exists.
 
 ## Use Case 3: Patient or Coordinator Shortlist
@@ -69,4 +69,5 @@
   - `/api/gaps/regions?level=state`
 - [x] Run local API smoke check for `/api/facilities/data-quality`.
 - [x] Run local UI smoke check for facility capability trust panel.
+- [x] Run local API smoke check for `/api/gaps/regions` confidence factors.
 - [x] Run Playwright smoke tests if the dev server and Lakebase credentials are available.

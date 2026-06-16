@@ -371,7 +371,106 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
                 WHEN confidence_score >= 75 THEN 'High'
                 WHEN confidence_score >= 50 THEN 'Medium'
                 ELSE 'Low'
-              END AS confidence_label
+              END AS confidence_label,
+              (
+                SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                  'label', factor.label,
+                  'severity', factor.severity,
+                  'detail', factor.detail
+                )), '[]'::jsonb)
+                FROM (
+                  VALUES
+                    (
+                      CASE WHEN households_surveyed < 450 THEN 'Limited household survey support' END,
+                      CASE WHEN households_surveyed < 225 THEN 'high' ELSE 'medium' END,
+                      CONCAT(ROUND(households_surveyed::numeric, 0)::int, ' surveyed households')
+                    ),
+                    (
+                      CASE WHEN women_interviewed < 350 THEN 'Limited women interview support' END,
+                      CASE WHEN women_interviewed < 175 THEN 'high' ELSE 'medium' END,
+                      CONCAT(ROUND(women_interviewed::numeric, 0)::int, ' women interviewed')
+                    ),
+                    (
+                      CASE WHEN facility_count < 5 THEN 'Sparse facility evidence' END,
+                      CASE WHEN facility_count = 0 THEN 'high' ELSE 'medium' END,
+                      CONCAT(ROUND(facility_count::numeric, 0)::int, ' facilities matched to this geography')
+                    ),
+                    (
+                      CASE
+                        WHEN facility_count > 0 AND geocoded_count / GREATEST(facility_count, 1) < 0.8
+                          THEN 'Facility locations incomplete'
+                      END,
+                      CASE
+                        WHEN facility_count > 0 AND geocoded_count / GREATEST(facility_count, 1) < 0.5
+                          THEN 'high'
+                        ELSE 'medium'
+                      END,
+                      CONCAT(
+                        ROUND(geocoded_count::numeric, 0)::int,
+                        ' of ',
+                        ROUND(facility_count::numeric, 0)::int,
+                        ' facilities have coordinates'
+                      )
+                    ),
+                    (
+                      CASE
+                        WHEN post_office_count > 0 AND geocoded_pincode_count / GREATEST(post_office_count, 1) < 0.8
+                          THEN 'Pincode locations incomplete'
+                      END,
+                      CASE
+                        WHEN post_office_count > 0 AND geocoded_pincode_count / GREATEST(post_office_count, 1) < 0.5
+                          THEN 'high'
+                        ELSE 'medium'
+                      END,
+                      CONCAT(
+                        ROUND(geocoded_pincode_count::numeric, 0)::int,
+                        ' of ',
+                        ROUND(post_office_count::numeric, 0)::int,
+                        ' post-office rows have coordinates'
+                      )
+                    ),
+                    (
+                      CASE WHEN centroid_latitude IS NULL OR centroid_longitude IS NULL THEN 'No pincode centroid' END,
+                      'high',
+                      'Access pressure relies on fallback distance assumptions'
+                    ),
+                    (
+                      CASE
+                        WHEN facility_count > 0 AND contactable_count / GREATEST(facility_count, 1) < 0.5
+                          THEN 'Few facilities are contactable'
+                      END,
+                      CASE
+                        WHEN facility_count > 0 AND contactable_count / GREATEST(facility_count, 1) < 0.25
+                          THEN 'high'
+                        ELSE 'medium'
+                      END,
+                      CONCAT(
+                        ROUND(contactable_count::numeric, 0)::int,
+                        ' of ',
+                        ROUND(facility_count::numeric, 0)::int,
+                        ' facilities have phone or website data'
+                      )
+                    ),
+                    (
+                      CASE
+                        WHEN facility_count > 0 AND described_count / GREATEST(facility_count, 1) < 0.5
+                          THEN 'Facility service details are thin'
+                      END,
+                      CASE
+                        WHEN facility_count > 0 AND described_count / GREATEST(facility_count, 1) < 0.25
+                          THEN 'high'
+                        ELSE 'medium'
+                      END,
+                      CONCAT(
+                        ROUND(described_count::numeric, 0)::int,
+                        ' of ',
+                        ROUND(facility_count::numeric, 0)::int,
+                        ' facilities list specialties or capabilities'
+                      )
+                    )
+                ) AS factor(label, severity, detail)
+                WHERE factor.label IS NOT NULL
+              ) AS confidence_factors
             FROM scored
             ${whereClause}
             ORDER BY
