@@ -1,6 +1,6 @@
 import express, { Application, Request } from 'express';
 import { z } from 'zod';
-import { editableFacilityFields, effectiveFacilitiesCte } from '../lib/facility-edits';
+import { editableFacilityFields, effectiveFacilitiesCte, enrichedFacilitiesCte } from '../lib/facility-edits';
 
 interface AppKitWithLakebase {
   lakebase: {
@@ -53,6 +53,23 @@ const facilitySelect = `
   longitude
 `;
 
+const enrichedFacilitySelect = `
+  unique_id,
+  name,
+  description,
+  facility_type_id,
+  operator_type_id,
+  COALESCE(normalized_district_name, address_city) AS address_city,
+  COALESCE(normalized_state_name, address_state_or_region) AS address_state_or_region,
+  official_phone,
+  official_website,
+  specialties,
+  capability,
+  doctors,
+  latitude,
+  longitude
+`;
+
 const normalizeEditValue = (value: string | null) => {
   if (value === null) return null;
   const trimmed = value.trim();
@@ -69,13 +86,13 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
     app.get('/api/facilities/overview', async (_req, res) => {
       try {
         const result = await appkit.lakebase.query(`
-          WITH ${effectiveFacilitiesCte}
+          WITH ${enrichedFacilitiesCte}
           SELECT
             COUNT(*)::int AS facility_count,
-            COUNT(DISTINCT NULLIF(address_state_or_region, 'null'))::int AS state_count,
+            COUNT(DISTINCT normalized_state_name)::int AS state_count,
             COUNT(*) FILTER (WHERE NULLIF(facility_type_id, 'null') = 'hospital')::int AS hospital_count,
             COUNT(*) FILTER (WHERE NULLIF(facility_type_id, 'null') = 'clinic')::int AS clinic_count
-          FROM effective_facilities
+          FROM effective_facilities_enriched
         `);
         res.json(result.rows[0]);
       } catch (err) {
@@ -88,22 +105,22 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
       try {
         const [statesResult, typesResult] = await Promise.all([
           appkit.lakebase.query(`
-            WITH ${effectiveFacilitiesCte}
+            WITH ${enrichedFacilitiesCte}
             SELECT
-              NULLIF(address_state_or_region, 'null') AS value,
+              normalized_state_name AS value,
               COUNT(*)::int AS facility_count
-            FROM effective_facilities
-            WHERE NULLIF(address_state_or_region, 'null') IS NOT NULL
+            FROM effective_facilities_enriched
+            WHERE normalized_state_name IS NOT NULL
             GROUP BY 1
             ORDER BY facility_count DESC, value
             LIMIT 100
           `),
           appkit.lakebase.query(`
-            WITH ${effectiveFacilitiesCte}
+            WITH ${enrichedFacilitiesCte}
             SELECT
               NULLIF(facility_type_id, 'null') AS value,
               COUNT(*)::int AS facility_count
-            FROM effective_facilities
+            FROM effective_facilities_enriched
             WHERE NULLIF(facility_type_id, 'null') IS NOT NULL
             GROUP BY 1
             ORDER BY facility_count DESC, value
@@ -140,6 +157,8 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
             OR COALESCE(description, '') ILIKE $${params.length}
             OR COALESCE(address_city, '') ILIKE $${params.length}
             OR COALESCE(address_state_or_region, '') ILIKE $${params.length}
+            OR COALESCE(normalized_district_name, '') ILIKE $${params.length}
+            OR COALESCE(normalized_state_name, '') ILIKE $${params.length}
             OR COALESCE(specialties, '') ILIKE $${params.length}
           )
         `);
@@ -147,7 +166,7 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
 
       if (state) {
         params.push(state);
-        filters.push(`NULLIF(address_state_or_region, 'null') = $${params.length}`);
+        filters.push(`normalized_state_name = $${params.length}`);
       }
 
       if (type) {
@@ -160,12 +179,12 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
       try {
         const result = await appkit.lakebase.query(
           `
-            WITH ${effectiveFacilitiesCte}
-            SELECT ${facilitySelect}
-            FROM effective_facilities
+            WITH ${enrichedFacilitiesCte}
+            SELECT ${enrichedFacilitySelect}
+            FROM effective_facilities_enriched
             ${whereClause}
             ORDER BY
-              NULLIF(address_state_or_region, 'null') NULLS LAST,
+              normalized_state_name NULLS LAST,
               name NULLS LAST,
               unique_id
             LIMIT 60

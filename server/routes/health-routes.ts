@@ -1,5 +1,6 @@
 import { Application } from 'express';
 import { z } from 'zod';
+import { normalizedGeoExpression, titleCaseExpression } from '../lib/facility-edits';
 
 interface AppKitWithLakebase {
   lakebase: {
@@ -26,7 +27,7 @@ const DistrictQuery = z.object({
 
 const districtSelect = `
   district_name,
-  state_ut,
+  ${titleCaseExpression(normalizedGeoExpression('state_ut::text'))} AS state_ut,
   households_surveyed,
   women_15_49_interviewed,
   men_15_54_interviewed,
@@ -53,7 +54,7 @@ export function setupHealthRoutes(appkit: AppKitWithLakebase) {
         const result = await appkit.lakebase.query(`
           SELECT
             COUNT(*)::int AS district_count,
-            COUNT(DISTINCT state_ut)::int AS state_count,
+            COUNT(DISTINCT ${normalizedGeoExpression('state_ut::text')})::int AS state_count,
             ROUND(AVG(hh_use_improved_sanitation_pct)::numeric, 1)::float AS avg_sanitation_pct,
             ROUND(AVG(hh_member_covered_health_insurance_pct)::numeric, 1)::float AS avg_insurance_pct,
             ROUND(AVG(all_w15_49_who_are_anaemic_pct)::numeric, 1)::float AS avg_anaemia_pct,
@@ -70,9 +71,11 @@ export function setupHealthRoutes(appkit: AppKitWithLakebase) {
     app.get('/api/health/states', async (_req, res) => {
       try {
         const result = await appkit.lakebase.query(`
-          SELECT state_ut, COUNT(*)::int AS district_count
+          SELECT
+            ${titleCaseExpression(normalizedGeoExpression('state_ut::text'))} AS state_ut,
+            COUNT(*)::int AS district_count
           FROM public.health_indicators
-          GROUP BY state_ut
+          GROUP BY ${normalizedGeoExpression('state_ut::text')}
           ORDER BY state_ut
         `);
         res.json(result.rows);
@@ -95,12 +98,16 @@ export function setupHealthRoutes(appkit: AppKitWithLakebase) {
 
       if (q) {
         params.push(`%${q}%`);
-        filters.push(`(district_name ILIKE $${params.length} OR state_ut ILIKE $${params.length})`);
+        filters.push(
+          `(district_name ILIKE $${params.length} OR ${titleCaseExpression(
+            normalizedGeoExpression('state_ut::text')
+          )} ILIKE $${params.length})`
+        );
       }
 
       if (state) {
         params.push(state);
-        filters.push(`state_ut = $${params.length}`);
+        filters.push(`${titleCaseExpression(normalizedGeoExpression('state_ut::text'))} = $${params.length}`);
       }
 
       const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
@@ -112,10 +119,12 @@ export function setupHealthRoutes(appkit: AppKitWithLakebase) {
             SELECT ${districtSelect}
             FROM public.health_indicators
             ${whereClause}
-            ORDER BY ${sortColumn} DESC NULLS LAST, state_ut, district_name
+            ORDER BY ${sortColumn} DESC NULLS LAST, ${titleCaseExpression(
+              normalizedGeoExpression('state_ut::text')
+            )}, district_name
             LIMIT 80
           `,
-          params,
+          params
         );
         res.json(result.rows);
       } catch (err) {

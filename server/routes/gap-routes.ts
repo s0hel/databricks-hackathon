@@ -1,6 +1,6 @@
 import { Application } from 'express';
 import { z } from 'zod';
-import { effectiveFacilitiesCte } from '../lib/facility-edits';
+import { enrichedFacilitiesCte, normalizedGeoExpression, titleCaseExpression } from '../lib/facility-edits';
 
 interface AppKitWithLakebase {
   lakebase: {
@@ -21,16 +21,6 @@ const coordinateColumn = (column: string) => `
   END
 `;
 
-const normalizedGeo = (expression: string) => `
-  CASE
-    WHEN LOWER(TRIM(${expression})) IN ('maharastra', 'maharashtra') THEN 'maharashtra'
-    WHEN LOWER(TRIM(${expression})) IN ('nct of delhi', 'delhi') THEN 'delhi'
-    WHEN LOWER(TRIM(${expression})) IN ('jammu & kashmir', 'jammu and kashmir') THEN 'jammu and kashmir'
-    WHEN LOWER(TRIM(${expression})) IN ('andaman & nicobar islands', 'andaman and nicobar islands') THEN 'andaman and nicobar islands'
-    ELSE REPLACE(LOWER(TRIM(${expression})), '&', 'and')
-  END
-`;
-
 const GapQuery = z.object({
   level: z.enum(['state', 'district']).optional().default('state'),
   state: z.string().trim().max(120).optional().default(''),
@@ -42,9 +32,9 @@ const buildHealthGeo = (level: 'state' | 'district') => {
   if (level === 'state') {
     return `
       SELECT
-        MIN(TRIM(state_ut)) AS geography_key,
-        MIN(TRIM(state_ut)) AS geography_name,
-        MIN(TRIM(state_ut)) AS state_name,
+        MIN(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}) AS geography_key,
+        MIN(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}) AS geography_name,
+        MIN(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}) AS state_name,
         COUNT(*)::int AS district_count,
         SUM(COALESCE(${numericColumn('households_surveyed')}, 0))::float AS households_surveyed,
         SUM(COALESCE(${numericColumn('women_15_49_interviewed')}, 0))::float AS women_interviewed,
@@ -55,15 +45,15 @@ const buildHealthGeo = (level: 'state' | 'district') => {
         AVG(${numericColumn('child_u5_who_are_stunted_height_for_age_18_pct')})::float AS stunting_pct,
         AVG(${numericColumn('w15_plus_with_high_bp_sys_gte_140_mmhg_and_or_dia_gte_90_mm_pct')})::float AS high_bp_women_pct
       FROM public.health_indicators
-      GROUP BY ${normalizedGeo('state_ut')}
+      GROUP BY ${normalizedGeoExpression('state_ut::text')}
     `;
   }
 
   return `
     SELECT
-      CONCAT(TRIM(state_ut), ' / ', TRIM(district_name)) AS geography_key,
+      CONCAT(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}, ' / ', TRIM(district_name)) AS geography_key,
       TRIM(district_name) AS geography_name,
-      TRIM(state_ut) AS state_name,
+      ${titleCaseExpression(normalizedGeoExpression('state_ut::text'))} AS state_name,
       1::int AS district_count,
       COALESCE(${numericColumn('households_surveyed')}, 0)::float AS households_surveyed,
       COALESCE(${numericColumn('women_15_49_interviewed')}, 0)::float AS women_interviewed,
@@ -78,13 +68,12 @@ const buildHealthGeo = (level: 'state' | 'district') => {
 };
 
 const buildFacilityGeo = (level: 'state' | 'district') => {
-  const geographyName =
-    level === 'state' ? `TRIM(NULLIF(address_state_or_region, 'null'))` : `TRIM(NULLIF(address_city, 'null'))`;
+  const geographyName = level === 'state' ? `normalized_state_name` : `normalized_district_name`;
 
   return `
     SELECT
       MIN(${geographyName}) AS geography_name,
-      MIN(TRIM(NULLIF(address_state_or_region, 'null'))) AS state_name,
+      MIN(normalized_state_name) AS state_name,
       COUNT(*)::float AS facility_count,
       COUNT(*) FILTER (WHERE NULLIF(facility_type_id, 'null') = 'hospital')::float AS hospital_count,
       COUNT(*) FILTER (WHERE NULLIF(facility_type_id, 'null') = 'clinic')::float AS clinic_count,
@@ -102,10 +91,10 @@ const buildFacilityGeo = (level: 'state' | 'district') => {
         WHERE NULLIF(specialties, 'null') IS NOT NULL
           OR NULLIF(capability, 'null') IS NOT NULL
       )::float AS described_count
-    FROM effective_facilities
+    FROM effective_facilities_enriched
     WHERE ${geographyName} IS NOT NULL
-    GROUP BY ${normalizedGeo(geographyName)}${
-      level === 'district' ? `, ${normalizedGeo(`TRIM(NULLIF(address_state_or_region, 'null'))`)}` : ''
+    GROUP BY ${normalizedGeoExpression(geographyName)}${
+      level === 'district' ? `, ${normalizedGeoExpression('normalized_state_name')}` : ''
     }
   `;
 };
@@ -142,8 +131,8 @@ const buildPincodeGeo = (level: 'state' | 'district') => {
       ) raw_pincodes
     ) p
     WHERE ${geographyName} IS NOT NULL
-    GROUP BY ${normalizedGeo(geographyName)}${
-      level === 'district' ? `, ${normalizedGeo(`TRIM(NULLIF(statename, 'null'))`)}` : ''
+    GROUP BY ${normalizedGeoExpression(geographyName)}${
+      level === 'district' ? `, ${normalizedGeoExpression(`TRIM(NULLIF(statename, 'null'))`)} ` : ''
     }
   `;
 };
@@ -151,14 +140,14 @@ const buildPincodeGeo = (level: 'state' | 'district') => {
 const buildHospitalPoints = () => `
   SELECT
     state_name,
-    latitude,
-    longitude
+      latitude,
+      longitude
   FROM (
     SELECT
-      TRIM(NULLIF(address_state_or_region, 'null')) AS state_name,
+      normalized_state_name AS state_name,
       ${coordinateColumn('latitude')} AS latitude,
       ${coordinateColumn('longitude')} AS longitude
-    FROM effective_facilities
+    FROM effective_facilities_enriched
     WHERE NULLIF(facility_type_id, 'null') = 'hospital'
   ) coordinates
   WHERE latitude BETWEEN 6 AND 38
@@ -194,9 +183,9 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
       const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
       const joinCondition =
         level === 'state'
-          ? `${normalizedGeo('h.geography_name')} = ${normalizedGeo('f.geography_name')}`
-          : `${normalizedGeo('h.geography_name')} = ${normalizedGeo('f.geography_name')}
-          AND ${normalizedGeo('h.state_name')} = ${normalizedGeo('f.state_name')}`;
+          ? `${normalizedGeoExpression('h.geography_name')} = ${normalizedGeoExpression('f.geography_name')}`
+          : `${normalizedGeoExpression('h.geography_name')} = ${normalizedGeoExpression('f.geography_name')}
+          AND ${normalizedGeoExpression('h.state_name')} = ${normalizedGeoExpression('f.state_name')}`;
 
       try {
         const result = await appkit.lakebase.query(
@@ -204,7 +193,7 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
             WITH health_geo AS (
               ${buildHealthGeo(level)}
             ),
-            ${effectiveFacilitiesCte},
+            ${enrichedFacilitiesCte},
             facility_geo AS (
               ${buildFacilityGeo(level)}
             ),
@@ -230,7 +219,7 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
                     )))
                   )::float AS nearest_hospital_km
                 FROM hospital_points hp
-                WHERE ${normalizedGeo('hp.state_name')} = ${normalizedGeo('p.state_name')}
+                WHERE ${normalizedGeoExpression('hp.state_name')} = ${normalizedGeoExpression('p.state_name')}
                   AND p.centroid_latitude IS NOT NULL
                   AND p.centroid_longitude IS NOT NULL
               ) nearest ON TRUE
@@ -256,9 +245,9 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
               LEFT JOIN facility_geo f ON ${joinCondition}
               LEFT JOIN pincode_access p ON ${
                 level === 'state'
-                  ? `${normalizedGeo('h.geography_name')} = ${normalizedGeo('p.geography_name')}`
-                  : `${normalizedGeo('h.geography_name')} = ${normalizedGeo('p.geography_name')}
-                  AND ${normalizedGeo('h.state_name')} = ${normalizedGeo('p.state_name')}`
+                  ? `${normalizedGeoExpression('h.geography_name')} = ${normalizedGeoExpression('p.geography_name')}`
+                  : `${normalizedGeoExpression('h.geography_name')} = ${normalizedGeoExpression('p.geography_name')}
+                  AND ${normalizedGeoExpression('h.state_name')} = ${normalizedGeoExpression('p.state_name')}`
               }
             ),
             scored AS (
