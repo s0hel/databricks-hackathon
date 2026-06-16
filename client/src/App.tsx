@@ -213,9 +213,16 @@ interface GapRegion {
   facilities_per_100_pincodes: number;
   gap_score: number;
   confidence_score: number;
+  gap_factors: GapFactor[];
   evidence_label: string;
   confidence_label: 'High' | 'Medium' | 'Low';
   confidence_factors: ConfidenceFactor[];
+}
+
+interface GapFactor {
+  label: string;
+  severity: 'high' | 'medium';
+  detail: string;
 }
 
 interface ConfidenceFactor {
@@ -370,6 +377,11 @@ const capabilityTrustDescription =
 const confidenceFactorTone: Record<ConfidenceFactor['severity'], string> = {
   high: 'border-[#FF3621]/25 bg-[#FF3621]/10 text-[#8A1F13]',
   medium: 'border-amber-500/30 bg-amber-50 text-amber-900',
+};
+
+const gapFactorTone: Record<GapFactor['severity'], string> = {
+  high: 'border-[#FF3621]/25 bg-white text-[#8A1F13]',
+  medium: 'border-[#0B6E99]/25 bg-white text-[#0B5068]',
 };
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -1683,6 +1695,7 @@ function GapCard({ gap, selected = false }: { gap: GapRegion; selected?: boolean
           </div>
         </div>
 
+        <GapFactors factors={gap.gap_factors} />
         <ConfidenceFactors factors={gap.confidence_factors} />
 
         <div className="mt-4 grid gap-2 border-t border-[#0B2026]/10 pt-4 text-sm sm:grid-cols-2 lg:grid-cols-6">
@@ -1699,6 +1712,32 @@ function GapCard({ gap, selected = false }: { gap: GapRegion; selected?: boolean
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function GapFactors({ factors }: { factors: GapFactor[] | null | undefined }) {
+  const visibleFactors = factors?.slice(0, 4) ?? [];
+
+  if (visibleFactors.length === 0) return null;
+
+  return (
+    <div className="mt-4 rounded-md border border-[#FF3621]/20 bg-[#FFF7F4] p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#8A1F13]">
+        <Target className="h-4 w-4" />
+        Gap drivers
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {visibleFactors.map((factor) => (
+          <div
+            key={`${factor.label}-${factor.detail}`}
+            className={`rounded-md border px-3 py-2 text-sm ${gapFactorTone[factor.severity]}`}
+          >
+            <div className="font-semibold">{factor.label}</div>
+            <div className="mt-0.5 text-xs opacity-80">{factor.detail}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

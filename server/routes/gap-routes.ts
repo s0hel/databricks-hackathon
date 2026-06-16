@@ -359,6 +359,42 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
                 + geographic_access_score * 0.3
               ))::numeric, 1)::float AS gap_score,
               ROUND(confidence_score::numeric, 1)::float AS confidence_score,
+              (
+                SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                  'label', factor.label,
+                  'severity', factor.severity,
+                  'detail', factor.detail
+                )), '[]'::jsonb)
+                FROM (
+                  VALUES
+                    (
+                      CASE WHEN facility_count = 0 THEN 'No matched facilities' END,
+                      'high',
+                      'Supply adequacy is zero for this geography'
+                    ),
+                    (
+                      CASE WHEN facility_count > 0 AND facility_count < 5 THEN 'Very few matched facilities' END,
+                      'medium',
+                      CONCAT(ROUND(facility_count::numeric, 0)::int, ' facilities matched to this geography')
+                    ),
+                    (
+                      CASE WHEN need_score >= 45 THEN 'High health need' END,
+                      'high',
+                      CONCAT('Need score ', ROUND(need_score::numeric, 1)::float)
+                    ),
+                    (
+                      CASE WHEN geographic_access_score >= 45 THEN 'High access pressure' END,
+                      CASE WHEN geographic_access_score >= 65 THEN 'high' ELSE 'medium' END,
+                      CONCAT('Access pressure ', ROUND(geographic_access_score::numeric, 1)::float)
+                    ),
+                    (
+                      CASE WHEN supply_adequacy_score < 30 THEN 'Low supply adequacy' END,
+                      CASE WHEN supply_adequacy_score < 10 THEN 'high' ELSE 'medium' END,
+                      CONCAT('Supply adequacy ', ROUND(supply_adequacy_score::numeric, 1)::float)
+                    )
+                ) AS factor(label, severity, detail)
+                WHERE factor.label IS NOT NULL
+              ) AS gap_factors,
               CASE
                 WHEN confidence_score < 50 THEN 'Data-poor'
                 WHEN need_score >= 45 AND supply_adequacy_score < 30 AND geographic_access_score >= 35 THEN 'Likely real gap'
@@ -389,11 +425,6 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
                       CASE WHEN women_interviewed < 350 THEN 'Limited women interview support' END,
                       CASE WHEN women_interviewed < 175 THEN 'high' ELSE 'medium' END,
                       CONCAT(ROUND(women_interviewed::numeric, 0)::int, ' women interviewed')
-                    ),
-                    (
-                      CASE WHEN facility_count < 5 THEN 'Sparse facility evidence' END,
-                      CASE WHEN facility_count = 0 THEN 'high' ELSE 'medium' END,
-                      CONCAT(ROUND(facility_count::numeric, 0)::int, ' facilities matched to this geography')
                     ),
                     (
                       CASE
