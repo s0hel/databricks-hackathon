@@ -482,6 +482,7 @@ export default function App() {
   const [gapLevel, setGapLevel] = useState<'state' | 'district'>('state');
   const [gapQuery, setGapQuery] = useState('');
   const [gapState, setGapState] = useState('');
+  const [gapCapability, setGapCapability] = useState('');
   const [minConfidence, setMinConfidence] = useState('0');
   const [mapMetric, setMapMetric] = useState<MapMetric>('gap');
   const [selectedGapKey, setSelectedGapKey] = useState<string | null>(null);
@@ -552,6 +553,7 @@ export default function App() {
     params.set('minConfidence', minConfidence);
     if (gapQuery.trim()) params.set('q', gapQuery.trim());
     if (gapState) params.set('state', gapState);
+    if (gapCapability) params.set('capability', gapCapability);
 
     async function loadGaps() {
       setGapLoading(true);
@@ -571,7 +573,7 @@ export default function App() {
     void loadGaps();
 
     return () => controller.abort();
-  }, [editRevision, gapLevel, gapQuery, gapState, minConfidence]);
+  }, [editRevision, gapCapability, gapLevel, gapQuery, gapState, minConfidence]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -652,6 +654,11 @@ export default function App() {
       highConfidenceCount: gaps.filter((gap) => gap.confidence_label === 'High').length,
     };
   }, [gaps]);
+
+  const selectedGapCapabilityLabel = useMemo(
+    () => capabilityOptions.find((option) => option.value === gapCapability)?.label ?? '',
+    [gapCapability]
+  );
 
   const selectedGap = useMemo(
     () => gaps.find((gap) => gap.geography_key === selectedGapKey) ?? null,
@@ -851,6 +858,22 @@ export default function App() {
                 </label>
 
                 <label className="block space-y-2 text-sm font-medium">
+                  <span>Care capability</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    value={gapCapability}
+                    onChange={(event) => setGapCapability(event.target.value)}
+                  >
+                    <option value="">All facility evidence</option>
+                    {capabilityOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block space-y-2 text-sm font-medium">
                   <span>Minimum confidence</span>
                   <select
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -871,6 +894,7 @@ export default function App() {
                     setGapLevel('state');
                     setGapState('');
                     setGapQuery('');
+                    setGapCapability('');
                     setMinConfidence('0');
                     setSelectedGapKey(null);
                   }}
@@ -903,7 +927,9 @@ export default function App() {
               <div>
                 <h2 className="text-xl font-semibold">Highest-risk gaps in care</h2>
                 <p className="text-sm text-[#0B2026]/65">
-                  Ranked by high health burden, low trust-weighted facility evidence, and filtered by confidence.
+                  Ranked by high health burden, low trust-weighted{' '}
+                  {selectedGapCapabilityLabel ? `${selectedGapCapabilityLabel.toLowerCase()} ` : ''}facility evidence,
+                  and filtered by confidence.
                 </p>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[420px]">
@@ -962,7 +988,12 @@ export default function App() {
                 </Card>
 
                 {gaps.map((gap) => (
-                  <GapCard key={gap.geography_key} gap={gap} selected={gap.geography_key === selectedGapKey} />
+                  <GapCard
+                    key={gap.geography_key}
+                    gap={gap}
+                    selected={gap.geography_key === selectedGapKey}
+                    capabilityLabel={selectedGapCapabilityLabel}
+                  />
                 ))}
                 {gaps.length === 0 && (
                   <div className="rounded-md border border-[#0B2026]/10 bg-white p-8 text-center text-[#0B2026]/65">
@@ -1724,7 +1755,18 @@ function HistogramMetric({
   );
 }
 
-function GapCard({ gap, selected = false }: { gap: GapRegion; selected?: boolean }) {
+function GapCard({
+  gap,
+  selected = false,
+  capabilityLabel,
+}: {
+  gap: GapRegion;
+  selected?: boolean;
+  capabilityLabel?: string;
+}) {
+  const supplyLabel = capabilityLabel ? `${capabilityLabel} evidence` : 'Facilities';
+  const nearestLabel = capabilityLabel ? `Nearest ${capabilityLabel.toLowerCase()}` : 'Nearest hospital';
+
   return (
     <Card
       id={gapCardId(gap.geography_key)}
@@ -1760,7 +1802,7 @@ function GapCard({ gap, selected = false }: { gap: GapRegion; selected?: boolean
 
           <div className="grid gap-2 text-sm sm:grid-cols-2 lg:min-w-[300px] lg:grid-cols-1">
             <MiniStat
-              label="Facilities"
+              label={supplyLabel}
               value={`${formatCount(gap.facility_count)} total, ${formatCount(gap.hospital_count)} hospitals`}
             />
             <MiniStat
@@ -1775,7 +1817,7 @@ function GapCard({ gap, selected = false }: { gap: GapRegion; selected?: boolean
               label="Facility trust signals"
               value={`${formatCount(gap.geocoded_count)} mapped, ${formatCount(gap.contactable_count)} contactable`}
             />
-            <MiniStat label="Nearest hospital" value={formatKm(gap.nearest_hospital_km)} />
+            <MiniStat label={nearestLabel} value={formatKm(gap.nearest_hospital_km)} />
             <MiniStat
               label="Survey support"
               value={`${formatCount(gap.households_surveyed)} households, ${formatCount(gap.women_interviewed)} women`}

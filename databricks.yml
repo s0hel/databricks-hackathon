@@ -45,5 +45,5 @@ targets:
       postgres_branch: projects/hackathon-lb/branches/production
       postgres_database: projects/hackathon-lb/branches/production/databases/databricks-postgres
       postgres_project: projects/hackathon-lb
-      genie_space_id: ""
-      genie_space_name: hackathon-health-genie
+      genie_space_id: "01f168d68121184189fe75938078f9d3"
+      genie_space_name: "India Health and Facility Data"

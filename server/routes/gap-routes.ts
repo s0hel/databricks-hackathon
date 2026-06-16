@@ -1,5 +1,6 @@
 import { Application } from 'express';
 import { z } from 'zod';
+import { capabilityTaxonomy, getCapabilitySearchTerms } from '../lib/capability-trust';
 import { enrichedFacilitiesCte, normalizedGeoExpression, titleCaseExpression } from '../lib/facility-edits';
 
 interface AppKitWithLakebase {
@@ -25,6 +26,7 @@ const GapQuery = z.object({
   level: z.enum(['state', 'district']).optional().default('state'),
   state: z.string().trim().max(120).optional().default(''),
   q: z.string().trim().max(120).optional().default(''),
+  capability: z.enum(capabilityTaxonomy).optional(),
   minConfidence: z.coerce.number().min(0).max(100).optional().default(0),
 });
 
@@ -72,9 +74,30 @@ const buildHealthGeo = (level: 'state' | 'district', stateParamIndex: number | n
   `;
 };
 
-const buildFacilityGeo = (level: 'state' | 'district', stateParamIndex: number | null) => {
+const buildCapabilityPredicate = (paramIndexes: number[], alias = '') => {
+  if (paramIndexes.length === 0) return '';
+
+  const prefix = alias ? `${alias}.` : '';
+  const fields = ['facility_type_id', 'specialties', 'capability', 'description', 'doctors'];
+
+  return paramIndexes
+    .map(
+      (paramIndex) => `
+        ${fields.map((field) => `COALESCE(${prefix}${field}, '') ILIKE $${paramIndex}`).join('\n        OR ')}
+      `
+    )
+    .map((filter) => `(${filter})`)
+    .join(' OR ');
+};
+
+const buildFacilityGeo = (
+  level: 'state' | 'district',
+  stateParamIndex: number | null,
+  capabilityPredicate: string
+) => {
   const geographyName = level === 'state' ? `normalized_state_name` : `normalized_district_name`;
   const stateFilter = stateParamIndex ? `AND normalized_state_name = $${stateParamIndex}` : '';
+  const capabilityFilter = capabilityPredicate ? `AND (${capabilityPredicate})` : '';
 
   return `
     SELECT
@@ -100,6 +123,7 @@ const buildFacilityGeo = (level: 'state' | 'district', stateParamIndex: number |
     FROM effective_facilities_enriched
     WHERE ${geographyName} IS NOT NULL
       ${stateFilter}
+      ${capabilityFilter}
     GROUP BY ${normalizedGeoExpression(geographyName)}${
       level === 'district' ? `, ${normalizedGeoExpression('normalized_state_name')}` : ''
     }
@@ -147,7 +171,7 @@ const buildPincodeGeo = (level: 'state' | 'district', stateParamIndex: number | 
   `;
 };
 
-const buildHospitalPoints = (stateParamIndex: number | null) => `
+const buildHospitalPoints = (stateParamIndex: number | null, capabilityPredicate: string) => `
   SELECT
     state_name,
       latitude,
@@ -158,7 +182,7 @@ const buildHospitalPoints = (stateParamIndex: number | null) => `
       ${coordinateColumn('latitude')} AS latitude,
       ${coordinateColumn('longitude')} AS longitude
     FROM effective_facilities_enriched
-    WHERE NULLIF(facility_type_id, 'null') = 'hospital'
+    WHERE ${capabilityPredicate ? `(${capabilityPredicate})` : `NULLIF(facility_type_id, 'null') = 'hospital'`}
       ${stateParamIndex ? `AND normalized_state_name = $${stateParamIndex}` : ''}
   ) coordinates
   WHERE latitude BETWEEN 6 AND 38
@@ -174,7 +198,7 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
         return;
       }
 
-      const { level, state, q, minConfidence } = parsed.data;
+      const { level, state, q, capability, minConfidence } = parsed.data;
       const filters: string[] = [];
       const params: Array<string | number> = [];
 
@@ -184,6 +208,13 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
       }
 
       const stateParamIndex = state ? params.length : null;
+      const capabilityParamIndexes = capability
+        ? getCapabilitySearchTerms(capability).map((term) => {
+            params.push(`%${term}%`);
+            return params.length;
+          })
+        : [];
+      const capabilityPredicate = buildCapabilityPredicate(capabilityParamIndexes);
 
       if (q) {
         params.push(`%${q}%`);
@@ -208,13 +239,13 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
             ),
             ${enrichedFacilitiesCte},
             facility_geo AS (
-              ${buildFacilityGeo(level, stateParamIndex)}
+              ${buildFacilityGeo(level, stateParamIndex, capabilityPredicate)}
             ),
             pincode_geo AS (
               ${buildPincodeGeo(level, stateParamIndex)}
             ),
             hospital_points AS (
-              ${buildHospitalPoints(stateParamIndex)}
+              ${buildHospitalPoints(stateParamIndex, capabilityPredicate)}
             ),
             pincode_access AS (
               SELECT
