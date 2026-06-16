@@ -65,21 +65,21 @@ export const titleCaseExpression = (expression: string) => `
 export const pincodeGeographyReferenceCtes = `
   pincode_state_reference AS (
     SELECT
-      ${normalizedGeoExpression('statename::text')} AS state_key,
-      MIN(${titleCaseExpression(normalizedGeoExpression('statename::text'))}) AS state_name
-    FROM public.pincode_directory
-    WHERE ${cleanTextExpression('statename::text')} IS NOT NULL
+      ${normalizedGeoExpression('state_ut::text')} AS state_key,
+      MIN(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}) AS state_name
+    FROM public.health_indicators
+    WHERE ${cleanTextExpression('state_ut::text')} IS NOT NULL
     GROUP BY 1
   ),
   pincode_district_reference AS (
     SELECT
-      ${normalizedGeoExpression('district::text')} AS district_key,
-      MIN(${titleCaseExpression(normalizedGeoExpression('district::text'))}) AS district_name,
-      MIN(${titleCaseExpression(normalizedGeoExpression('statename::text'))}) AS state_name,
-      COUNT(DISTINCT ${normalizedGeoExpression('statename::text')})::int AS state_match_count
-    FROM public.pincode_directory
-    WHERE ${cleanTextExpression('district::text')} IS NOT NULL
-      AND ${cleanTextExpression('statename::text')} IS NOT NULL
+      ${normalizedGeoExpression('district_name::text')} AS district_key,
+      MIN(${titleCaseExpression(normalizedGeoExpression('district_name::text'))}) AS district_name,
+      MIN(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}) AS state_name,
+      COUNT(DISTINCT ${normalizedGeoExpression('state_ut::text')})::int AS state_match_count
+    FROM public.health_indicators
+    WHERE ${cleanTextExpression('district_name::text')} IS NOT NULL
+      AND ${cleanTextExpression('state_ut::text')} IS NOT NULL
     GROUP BY 1
   ),
   facility_state_alias_reference AS (
@@ -140,6 +140,14 @@ export const pincodeGeographyReferenceCtes = `
 export const enrichedFacilitiesCte = `
   ${effectiveFacilitiesCte},
   ${pincodeGeographyReferenceCtes},
+  effective_facility_geo_inputs AS (
+    SELECT
+      ef.*,
+      ${normalizedGeoExpression('ef.address_state_or_region::text')} AS raw_state_key,
+      ${normalizedGeoExpression('ef.address_city::text')} AS city_key,
+      ${titleCaseExpression(normalizedGeoExpression('ef.address_city::text'))} AS city_name
+    FROM effective_facilities ef
+  ),
   effective_facilities_enriched AS (
     SELECT
       ef.*,
@@ -157,7 +165,7 @@ export const enrichedFacilitiesCte = `
         CASE WHEN state_ref.state_key IS NULL AND state_as_district.state_match_count = 1 THEN state_as_district.district_name END,
         city_alias.district_name,
         city_as_district.district_name,
-        ${titleCaseExpression(normalizedGeoExpression('ef.address_city::text'))}
+        ef.city_name
       ) AS normalized_district_name,
       CASE
         WHEN raw_alias.state_name IS NOT NULL THEN 'alias_match'
@@ -167,35 +175,35 @@ export const enrichedFacilitiesCte = `
         WHEN city_alias.state_name IS NOT NULL THEN 'city_alias_match'
         WHEN city_embedded_state.state_name IS NOT NULL THEN 'city_embedded_state_match'
         WHEN city_as_district.state_match_count = 1 THEN 'city_field_mapped_from_district'
-        WHEN ${cleanTextExpression('ef.address_state_or_region::text')} IS NULL THEN 'missing_state'
+        WHEN ef.raw_state_key IS NULL THEN 'missing_state'
         ELSE 'unmapped_state'
       END AS geography_quality
-    FROM effective_facilities ef
+    FROM effective_facility_geo_inputs ef
     LEFT JOIN facility_state_alias_reference raw_alias
-      ON ${normalizedGeoExpression('ef.address_state_or_region::text')} = raw_alias.alias_key
+      ON ef.raw_state_key = raw_alias.alias_key
     LEFT JOIN LATERAL (
       SELECT state_name
       FROM pincode_state_reference
-      WHERE ${normalizedGeoExpression('ef.address_state_or_region::text')} LIKE '%' || state_key || '%'
+      WHERE ef.raw_state_key LIKE '%' || state_key || '%'
         AND LENGTH(state_key) > 2
       ORDER BY LENGTH(state_key) DESC
       LIMIT 1
     ) raw_embedded_state ON TRUE
     LEFT JOIN pincode_state_reference state_ref
-      ON ${normalizedGeoExpression('ef.address_state_or_region::text')} = state_ref.state_key
+      ON ef.raw_state_key = state_ref.state_key
     LEFT JOIN pincode_district_reference state_as_district
-      ON ${normalizedGeoExpression('ef.address_state_or_region::text')} = state_as_district.district_key
+      ON ef.raw_state_key = state_as_district.district_key
     LEFT JOIN facility_state_alias_reference city_alias
-      ON ${normalizedGeoExpression('ef.address_city::text')} = city_alias.alias_key
+      ON ef.city_key = city_alias.alias_key
     LEFT JOIN LATERAL (
       SELECT state_name
       FROM pincode_state_reference
-      WHERE ${normalizedGeoExpression('ef.address_city::text')} LIKE '%' || state_key || '%'
+      WHERE ef.city_key LIKE '%' || state_key || '%'
         AND LENGTH(state_key) > 2
       ORDER BY LENGTH(state_key) DESC
       LIMIT 1
     ) city_embedded_state ON TRUE
     LEFT JOIN pincode_district_reference city_as_district
-      ON ${normalizedGeoExpression('ef.address_city::text')} = city_as_district.district_key
+      ON ef.city_key = city_as_district.district_key
   )
 `;

@@ -1,6 +1,11 @@
 import express, { Application, Request } from 'express';
 import { z } from 'zod';
-import { editableFacilityFields, effectiveFacilitiesCte, enrichedFacilitiesCte } from '../lib/facility-edits';
+import {
+  editableFacilityFields,
+  effectiveFacilitiesCte,
+  enrichedFacilitiesCte,
+  normalizedGeoExpression,
+} from '../lib/facility-edits';
 
 interface AppKitWithLakebase {
   lakebase: {
@@ -101,10 +106,105 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
       }
     });
 
+    app.get('/api/facilities/data-quality', async (_req, res) => {
+      try {
+        const result = await appkit.lakebase.query(`
+          WITH ${enrichedFacilitiesCte},
+          ambiguous_districts AS (
+            SELECT
+              district_key,
+              district_name,
+              state_match_count
+            FROM pincode_district_reference
+            WHERE state_match_count > 1
+          ),
+          unmapped_facility_states AS (
+            SELECT
+              address_state_or_region AS raw_state,
+              COUNT(*)::int AS facility_count
+            FROM effective_facilities_enriched
+            WHERE geography_quality = 'unmapped_state'
+            GROUP BY 1
+            ORDER BY facility_count DESC, raw_state
+            LIMIT 12
+          ),
+          geography_quality_counts AS (
+            SELECT
+              geography_quality,
+              COUNT(*)::int AS facility_count
+            FROM effective_facilities_enriched
+            GROUP BY 1
+            ORDER BY facility_count DESC, geography_quality
+          ),
+          facility_type_issues AS (
+            SELECT
+              COUNT(*) FILTER (
+                WHERE NULLIF(facility_type_id, 'null') IS NULL
+              )::int AS missing_facility_type_count,
+              COUNT(*) FILTER (
+                WHERE LOWER(NULLIF(facility_type_id, 'null')) = 'farmacy'
+              )::int AS farmacy_type_count
+            FROM effective_facilities
+          )
+          SELECT
+            (
+              SELECT COUNT(DISTINCT ${normalizedGeoExpression('address_state_or_region::text')})::int
+              FROM public.facilities
+            ) AS raw_facility_state_distinct_count,
+            COUNT(DISTINCT normalized_state_name)::int AS normalized_facility_state_distinct_count,
+            COUNT(*) FILTER (WHERE geography_quality = 'unmapped_state')::int AS unmapped_facility_state_count,
+            (SELECT COUNT(*)::int FROM ambiguous_districts) AS ambiguous_district_mapping_count,
+            COUNT(*) FILTER (
+              WHERE latitude IS NULL
+                OR longitude IS NULL
+                OR latitude::text = 'null'
+                OR longitude::text = 'null'
+            )::int AS missing_facility_coordinate_count,
+            (
+              SELECT COUNT(*)::int
+              FROM public.pincode_directory
+              WHERE latitude IS NULL
+                OR longitude IS NULL
+                OR latitude::text = 'null'
+                OR longitude::text = 'null'
+            ) AS missing_pincode_coordinate_count,
+            (
+              SELECT missing_facility_type_count
+              FROM facility_type_issues
+            ) AS missing_facility_type_count,
+            (
+              SELECT farmacy_type_count
+              FROM facility_type_issues
+            ) AS farmacy_type_count,
+            (
+              SELECT COALESCE(jsonb_agg(to_jsonb(u)), '[]'::jsonb)
+              FROM unmapped_facility_states u
+            ) AS unmapped_facility_state_samples,
+            (
+              SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.state_match_count DESC, a.district_name), '[]'::jsonb)
+              FROM (
+                SELECT *
+                FROM ambiguous_districts
+                ORDER BY state_match_count DESC, district_name
+                LIMIT 12
+              ) a
+            ) AS ambiguous_district_samples,
+            (
+              SELECT COALESCE(jsonb_agg(to_jsonb(g)), '[]'::jsonb)
+              FROM geography_quality_counts g
+            ) AS geography_quality_counts
+          FROM effective_facilities_enriched
+        `);
+        res.json(result.rows[0]);
+      } catch (err) {
+        console.error('Failed to load facility data quality diagnostics:', err);
+        res.status(500).json({ error: 'Failed to load facility data quality diagnostics' });
+      }
+    });
+
     app.get('/api/facilities/options', async (_req, res) => {
       try {
-        const [statesResult, typesResult] = await Promise.all([
-          appkit.lakebase.query(`
+        const result = await appkit.lakebase.query(`
             WITH ${enrichedFacilitiesCte}
             SELECT
               normalized_state_name AS value,
@@ -114,22 +214,22 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
             GROUP BY 1
             ORDER BY facility_count DESC, value
             LIMIT 100
-          `),
-          appkit.lakebase.query(`
-            WITH ${enrichedFacilitiesCte}
+          `);
+
+        const typesResult = await appkit.lakebase.query(`
+            WITH ${effectiveFacilitiesCte}
             SELECT
               NULLIF(facility_type_id, 'null') AS value,
               COUNT(*)::int AS facility_count
-            FROM effective_facilities_enriched
+            FROM effective_facilities
             WHERE NULLIF(facility_type_id, 'null') IS NOT NULL
             GROUP BY 1
             ORDER BY facility_count DESC, value
             LIMIT 20
-          `),
-        ]);
+          `);
 
         res.json({
-          states: statesResult.rows,
+          states: result.rows,
           types: typesResult.rows,
         });
       } catch (err) {

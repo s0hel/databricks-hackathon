@@ -28,13 +28,16 @@ const GapQuery = z.object({
   minConfidence: z.coerce.number().min(0).max(100).optional().default(0),
 });
 
-const buildHealthGeo = (level: 'state' | 'district') => {
+const buildHealthGeo = (level: 'state' | 'district', stateParamIndex: number | null) => {
+  const stateName = titleCaseExpression(normalizedGeoExpression('state_ut::text'));
+  const stateWhere = stateParamIndex ? `WHERE ${stateName} = $${stateParamIndex}` : '';
+
   if (level === 'state') {
     return `
       SELECT
-        MIN(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}) AS geography_key,
-        MIN(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}) AS geography_name,
-        MIN(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}) AS state_name,
+        MIN(${stateName}) AS geography_key,
+        MIN(${stateName}) AS geography_name,
+        MIN(${stateName}) AS state_name,
         COUNT(*)::int AS district_count,
         SUM(COALESCE(${numericColumn('households_surveyed')}, 0))::float AS households_surveyed,
         SUM(COALESCE(${numericColumn('women_15_49_interviewed')}, 0))::float AS women_interviewed,
@@ -45,15 +48,16 @@ const buildHealthGeo = (level: 'state' | 'district') => {
         AVG(${numericColumn('child_u5_who_are_stunted_height_for_age_18_pct')})::float AS stunting_pct,
         AVG(${numericColumn('w15_plus_with_high_bp_sys_gte_140_mmhg_and_or_dia_gte_90_mm_pct')})::float AS high_bp_women_pct
       FROM public.health_indicators
+      ${stateWhere}
       GROUP BY ${normalizedGeoExpression('state_ut::text')}
     `;
   }
 
   return `
     SELECT
-      CONCAT(${titleCaseExpression(normalizedGeoExpression('state_ut::text'))}, ' / ', TRIM(district_name)) AS geography_key,
+      CONCAT(${stateName}, ' / ', TRIM(district_name)) AS geography_key,
       TRIM(district_name) AS geography_name,
-      ${titleCaseExpression(normalizedGeoExpression('state_ut::text'))} AS state_name,
+      ${stateName} AS state_name,
       1::int AS district_count,
       COALESCE(${numericColumn('households_surveyed')}, 0)::float AS households_surveyed,
       COALESCE(${numericColumn('women_15_49_interviewed')}, 0)::float AS women_interviewed,
@@ -64,11 +68,13 @@ const buildHealthGeo = (level: 'state' | 'district') => {
       ${numericColumn('child_u5_who_are_stunted_height_for_age_18_pct')} AS stunting_pct,
       ${numericColumn('w15_plus_with_high_bp_sys_gte_140_mmhg_and_or_dia_gte_90_mm_pct')} AS high_bp_women_pct
     FROM public.health_indicators
+    ${stateWhere}
   `;
 };
 
-const buildFacilityGeo = (level: 'state' | 'district') => {
+const buildFacilityGeo = (level: 'state' | 'district', stateParamIndex: number | null) => {
   const geographyName = level === 'state' ? `normalized_state_name` : `normalized_district_name`;
+  const stateFilter = stateParamIndex ? `AND normalized_state_name = $${stateParamIndex}` : '';
 
   return `
     SELECT
@@ -93,14 +99,17 @@ const buildFacilityGeo = (level: 'state' | 'district') => {
       )::float AS described_count
     FROM effective_facilities_enriched
     WHERE ${geographyName} IS NOT NULL
+      ${stateFilter}
     GROUP BY ${normalizedGeoExpression(geographyName)}${
       level === 'district' ? `, ${normalizedGeoExpression('normalized_state_name')}` : ''
     }
   `;
 };
 
-const buildPincodeGeo = (level: 'state' | 'district') => {
+const buildPincodeGeo = (level: 'state' | 'district', stateParamIndex: number | null) => {
   const geographyName = level === 'state' ? `TRIM(NULLIF(statename, 'null'))` : `TRIM(NULLIF(district, 'null'))`;
+  const pincodeStateName = titleCaseExpression(normalizedGeoExpression(`TRIM(NULLIF(statename, 'null'))`));
+  const stateFilter = stateParamIndex ? `AND ${pincodeStateName} = $${stateParamIndex}` : '';
 
   return `
     SELECT
@@ -131,13 +140,14 @@ const buildPincodeGeo = (level: 'state' | 'district') => {
       ) raw_pincodes
     ) p
     WHERE ${geographyName} IS NOT NULL
+      ${stateFilter}
     GROUP BY ${normalizedGeoExpression(geographyName)}${
       level === 'district' ? `, ${normalizedGeoExpression(`TRIM(NULLIF(statename, 'null'))`)} ` : ''
     }
   `;
 };
 
-const buildHospitalPoints = () => `
+const buildHospitalPoints = (stateParamIndex: number | null) => `
   SELECT
     state_name,
       latitude,
@@ -149,6 +159,7 @@ const buildHospitalPoints = () => `
       ${coordinateColumn('longitude')} AS longitude
     FROM effective_facilities_enriched
     WHERE NULLIF(facility_type_id, 'null') = 'hospital'
+      ${stateParamIndex ? `AND normalized_state_name = $${stateParamIndex}` : ''}
   ) coordinates
   WHERE latitude BETWEEN 6 AND 38
     AND longitude BETWEEN 68 AND 98
@@ -172,6 +183,8 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
         filters.push(`scored.state_name = $${params.length}`);
       }
 
+      const stateParamIndex = state ? params.length : null;
+
       if (q) {
         params.push(`%${q}%`);
         filters.push(`(scored.geography_name ILIKE $${params.length} OR scored.state_name ILIKE $${params.length})`);
@@ -191,17 +204,17 @@ export function setupGapRoutes(appkit: AppKitWithLakebase) {
         const result = await appkit.lakebase.query(
           `
             WITH health_geo AS (
-              ${buildHealthGeo(level)}
+              ${buildHealthGeo(level, stateParamIndex)}
             ),
             ${enrichedFacilitiesCte},
             facility_geo AS (
-              ${buildFacilityGeo(level)}
+              ${buildFacilityGeo(level, stateParamIndex)}
             ),
             pincode_geo AS (
-              ${buildPincodeGeo(level)}
+              ${buildPincodeGeo(level, stateParamIndex)}
             ),
             hospital_points AS (
-              ${buildHospitalPoints()}
+              ${buildHospitalPoints(stateParamIndex)}
             ),
             pincode_access AS (
               SELECT

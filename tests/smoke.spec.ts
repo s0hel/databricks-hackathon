@@ -60,6 +60,16 @@ test('smoke test - app loads and displays home page', async ({ page }) => {
   await expect(page.getByRole('tab', { name: 'Genie' })).toBeVisible();
 });
 
+test('smoke test - facility diagnostics loads', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('tab', { name: 'Facilities' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Facility search' })).toBeVisible();
+  await expect(page.getByText('Data quality diagnostics')).toBeVisible();
+  await expect(page.getByText('Unmapped facility states')).toBeVisible();
+  await expect(page.getByText('Missing pincode coordinates')).toBeVisible();
+});
+
 for (const [name, plugin] of enabledPages) {
   test(`smoke test - ${name} page loads`, async ({ page }) => {
     await page.goto(plugin.path);

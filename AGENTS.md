@@ -16,3 +16,5 @@ For enhanced AI assistance with Databricks CLI operations, authentication, data 
 databricks aitools install
 ```
 <!-- appkit-instructions-end -->
+
+Playwright is already installed, so dont try to install it again.

@@ -79,6 +79,33 @@ interface FacilityOverview {
   clinic_count: number;
 }
 
+interface FacilityDataQualitySample {
+  raw_state?: string | null;
+  district_key?: string | null;
+  district_name?: string | null;
+  facility_count?: number;
+  state_match_count?: number;
+}
+
+interface GeographyQualityCount {
+  geography_quality: string;
+  facility_count: number;
+}
+
+interface FacilityDataQuality {
+  raw_facility_state_distinct_count: number;
+  normalized_facility_state_distinct_count: number;
+  unmapped_facility_state_count: number;
+  ambiguous_district_mapping_count: number;
+  missing_facility_coordinate_count: number;
+  missing_pincode_coordinate_count: number;
+  missing_facility_type_count: number;
+  farmacy_type_count: number;
+  unmapped_facility_state_samples: FacilityDataQualitySample[];
+  ambiguous_district_samples: FacilityDataQualitySample[];
+  geography_quality_counts: GeographyQualityCount[];
+}
+
 interface FacilityOption {
   value: string;
   facility_count: number;
@@ -360,13 +387,15 @@ export default function App() {
   const [gapError, setGapError] = useState<string | null>(null);
 
   const [facilityOverview, setFacilityOverview] = useState<FacilityOverview | null>(null);
+  const [facilityDataQuality, setFacilityDataQuality] = useState<FacilityDataQuality | null>(null);
   const [facilityOptions, setFacilityOptions] = useState<FacilityOptions>({ states: [], types: [] });
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [facilityQuery, setFacilityQuery] = useState('');
   const [facilityState, setFacilityState] = useState('');
   const [facilityType, setFacilityType] = useState('');
-  const [, setFacilityLoading] = useState(true);
-  const [facilitiesLoading, setFacilitiesLoading] = useState(true);
+  const [, setFacilityLoading] = useState(false);
+  const [facilityDataQualityLoading, setFacilityDataQualityLoading] = useState(false);
+  const [facilitiesLoading, setFacilitiesLoading] = useState(false);
   const [facilityError, setFacilityError] = useState<string | null>(null);
   const [editRevision, setEditRevision] = useState(0);
 
@@ -381,6 +410,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (activeTab !== 'facilities') return;
+
+    setFacilityLoading(true);
     Promise.all([
       fetchJson<FacilityOverview>('/api/facilities/overview'),
       fetchJson<FacilityOptions>('/api/facilities/options'),
@@ -391,7 +423,19 @@ export default function App() {
       })
       .catch((err) => setFacilityError(err instanceof Error ? err.message : 'Failed to load facility data'))
       .finally(() => setFacilityLoading(false));
-  }, [editRevision]);
+  }, [activeTab, editRevision]);
+
+  useEffect(() => {
+    if (activeTab !== 'facilities') return;
+
+    setFacilityDataQualityLoading(true);
+    fetchJson<FacilityDataQuality>('/api/facilities/data-quality')
+      .then((dataQualityData) => setFacilityDataQuality(dataQualityData))
+      .catch((err) =>
+        setFacilityError(err instanceof Error ? err.message : 'Failed to load facility data quality diagnostics')
+      )
+      .finally(() => setFacilityDataQualityLoading(false));
+  }, [activeTab, editRevision]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -449,6 +493,8 @@ export default function App() {
   }, [query, state, sort]);
 
   useEffect(() => {
+    if (activeTab !== 'facilities') return;
+
     const controller = new AbortController();
     const params = new URLSearchParams();
     if (facilityQuery.trim()) params.set('q', facilityQuery.trim());
@@ -473,7 +519,7 @@ export default function App() {
     void loadFacilities();
 
     return () => controller.abort();
-  }, [editRevision, facilityQuery, facilityState, facilityType]);
+  }, [activeTab, editRevision, facilityQuery, facilityState, facilityType]);
 
   const selectedStateCount = useMemo(() => {
     if (!state) return states.reduce((sum, item) => sum + Number(item.district_count), 0);
@@ -1011,6 +1057,8 @@ export default function App() {
                   Facility directory
                 </div>
               </div>
+
+              <FacilityDataQualityPanel diagnostics={facilityDataQuality} loading={facilityDataQualityLoading} />
 
               {facilitiesLoading ? (
                 <div className="grid gap-3">
@@ -1666,6 +1714,211 @@ function ScoreBar({
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#0B2026]/10">
         <div className={`h-full rounded-full ${toneClass}`} style={{ width }} />
       </div>
+    </div>
+  );
+}
+
+function FacilityDataQualityPanel({
+  diagnostics,
+  loading,
+}: {
+  diagnostics: FacilityDataQuality | null;
+  loading: boolean;
+}) {
+  if (!loading && !diagnostics) {
+    return (
+      <div className="rounded-md border border-[#0B2026]/10 bg-white p-5 text-sm text-[#0B2026]/65 shadow-sm">
+        Data quality diagnostics are unavailable.
+      </div>
+    );
+  }
+
+  const geographyQualityCounts = diagnostics?.geography_quality_counts ?? [];
+  const mappedCount = geographyQualityCounts
+    .filter((item) => item.geography_quality !== 'unmapped_state')
+    .reduce((sum, item) => sum + Number(item.facility_count || 0), 0);
+  const topUnmapped = diagnostics?.unmapped_facility_state_samples.slice(0, 4) ?? [];
+  const topAmbiguous = diagnostics?.ambiguous_district_samples.slice(0, 4) ?? [];
+
+  return (
+    <Card className="rounded-md border-[#0B2026]/10 bg-white shadow-sm">
+      <CardContent className="space-y-4 p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Database className="h-4 w-4 text-[#FF3621]" />
+              Data quality diagnostics
+            </div>
+            <p className="mt-1 text-sm leading-6 text-[#0B2026]/65">
+              Facility geography is normalized before search and gap scoring, while missing coordinates and unresolved
+              mappings stay visible for remediation.
+            </p>
+          </div>
+          <div className="rounded-md border border-emerald-700/20 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+            {diagnostics ? (
+              <>
+                <span className="font-semibold">
+                  {formatCount(diagnostics.raw_facility_state_distinct_count)} raw states
+                </span>
+                <span className="mx-2 text-emerald-700">to</span>
+                <span className="font-semibold">
+                  {formatCount(diagnostics.normalized_facility_state_distinct_count)} normalized
+                </span>
+              </>
+            ) : (
+              <Skeleton className="h-5 w-44 rounded" />
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <QualityMetric
+            label="Unmapped facility states"
+            value={diagnostics?.unmapped_facility_state_count ?? null}
+            detail="Rows still missing a state match"
+            tone={(diagnostics?.unmapped_facility_state_count ?? 0) > 0 ? 'red' : 'green'}
+          />
+          <QualityMetric
+            label="Ambiguous districts"
+            value={diagnostics?.ambiguous_district_mapping_count ?? null}
+            detail="District names matching multiple states"
+            tone={(diagnostics?.ambiguous_district_mapping_count ?? 0) > 0 ? 'amber' : 'green'}
+          />
+          <QualityMetric
+            label="Missing facility coordinates"
+            value={diagnostics?.missing_facility_coordinate_count ?? null}
+            detail="Facilities without latitude or longitude"
+            tone={(diagnostics?.missing_facility_coordinate_count ?? 0) > 0 ? 'amber' : 'green'}
+          />
+          <QualityMetric
+            label="Missing pincode coordinates"
+            value={diagnostics?.missing_pincode_coordinate_count ?? null}
+            detail="Post office rows without coordinates"
+            tone={(diagnostics?.missing_pincode_coordinate_count ?? 0) > 0 ? 'amber' : 'green'}
+          />
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-3">
+          <div className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-3 text-sm">
+            <div className="mb-2 font-semibold">Geography match quality</div>
+            <div className="space-y-2">
+              {geographyQualityCounts.map((item) => (
+                <div key={item.geography_quality} className="flex items-center justify-between gap-3">
+                  <span className="text-[#0B2026]/65">{formatToken(item.geography_quality)}</span>
+                  <span className="font-semibold">{formatCount(item.facility_count)}</span>
+                </div>
+              ))}
+              {loading && geographyQualityCounts.length === 0 && (
+                <>
+                  <Skeleton className="h-4 rounded" />
+                  <Skeleton className="h-4 rounded" />
+                  <Skeleton className="h-4 rounded" />
+                </>
+              )}
+              {!loading && geographyQualityCounts.length === 0 && (
+                <div className="text-[#0B2026]/60">No geography classifications returned.</div>
+              )}
+              {mappedCount > 0 && (
+                <div className="border-t border-[#0B2026]/10 pt-2 text-xs text-[#0B2026]/55">
+                  {formatCount(mappedCount)} facilities have at least one normalized geography signal.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <QualitySampleList
+            title="Top unmapped raw states"
+            emptyLabel="No unmapped state values"
+            loading={loading}
+            samples={topUnmapped.map((item) => ({
+              label: normalizeText(item.raw_state, 'Unknown'),
+              value: formatCount(item.facility_count),
+            }))}
+          />
+
+          <QualitySampleList
+            title="Ambiguous district keys"
+            emptyLabel="No ambiguous district mappings"
+            loading={loading}
+            samples={topAmbiguous.map((item) => ({
+              label: normalizeText(item.district_name, normalizeText(item.district_key, 'Unknown')),
+              value: `${formatCount(item.state_match_count)} states`,
+            }))}
+            footer={
+              diagnostics
+                ? `${formatCount(diagnostics.missing_facility_type_count)} missing facility types, ${formatCount(
+                    diagnostics.farmacy_type_count
+                  )} farmacy spellings`
+                : undefined
+            }
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function QualityMetric({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: number | null;
+  detail: string;
+  tone: 'green' | 'amber' | 'red';
+}) {
+  const toneClass = {
+    green: 'border-emerald-700/20 bg-emerald-50 text-emerald-900',
+    amber: 'border-amber-700/20 bg-amber-50 text-amber-950',
+    red: 'border-[#FF3621]/25 bg-[#FF3621]/10 text-[#8A1F13]',
+  }[tone];
+
+  return (
+    <div className={`rounded-md border px-3 py-3 ${toneClass}`}>
+      <div className="text-xs opacity-75">{label}</div>
+      <div className="mt-1 text-xl font-semibold">
+        {value === null ? <Skeleton className="h-7 w-16" /> : formatCount(value)}
+      </div>
+      <div className="mt-1 text-xs opacity-75">{detail}</div>
+    </div>
+  );
+}
+
+function QualitySampleList({
+  title,
+  emptyLabel,
+  loading = false,
+  samples,
+  footer,
+}: {
+  title: string;
+  emptyLabel: string;
+  loading?: boolean;
+  samples: Array<{ label: string; value: string }>;
+  footer?: string;
+}) {
+  return (
+    <div className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-3 text-sm">
+      <div className="mb-2 font-semibold">{title}</div>
+      <div className="space-y-2">
+        {samples.map((sample) => (
+          <div key={`${sample.label}-${sample.value}`} className="flex items-center justify-between gap-3">
+            <span className="min-w-0 truncate text-[#0B2026]/65">{sample.label}</span>
+            <span className="shrink-0 font-semibold">{sample.value}</span>
+          </div>
+        ))}
+        {loading && samples.length === 0 && (
+          <>
+            <Skeleton className="h-4 rounded" />
+            <Skeleton className="h-4 rounded" />
+            <Skeleton className="h-4 rounded" />
+          </>
+        )}
+        {!loading && samples.length === 0 && <div className="text-[#0B2026]/60">{emptyLabel}</div>}
+      </div>
+      {footer && <div className="mt-3 border-t border-[#0B2026]/10 pt-2 text-xs text-[#0B2026]/55">{footer}</div>}
     </div>
   );
 }

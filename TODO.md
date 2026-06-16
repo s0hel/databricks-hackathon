@@ -14,7 +14,7 @@
 ## Data Quality Work
 
 - [x] Validate the normalized facility state counts against the Genie-reported issue: raw facility state field has 234 distinct values; normalized app state count now collapses to 34 mapped states/UTs in `/api/facilities/overview`.
-- [ ] Add a data quality diagnostics API/view that reports:
+- [x] Add a data quality diagnostics API/view that reports:
   - raw facility state distinct count
   - normalized facility state distinct count
   - unmapped facility state rows
@@ -64,4 +64,5 @@
   - `/api/facilities/options`
   - `/api/facilities/search?q=clinic`
   - `/api/gaps/regions?level=state`
-- [ ] Run Playwright smoke tests if the dev server and Lakebase credentials are available.
+- [x] Run local API smoke check for `/api/facilities/data-quality`.
+- [x] Run Playwright smoke tests if the dev server and Lakebase credentials are available.
