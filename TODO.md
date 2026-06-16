@@ -30,15 +30,17 @@
 
 ## Use Case 1: Facility Claim Trust
 
-- [ ] Define capability taxonomy: ICU, maternity, emergency, oncology, trauma, NICU, dialysis, surgery.
-- [ ] Parse claim evidence from `facility_type_id`, `specialties`, `capability`, `description`, and `doctors`.
-- [ ] Score each facility-capability pair as:
+- [x] Define capability taxonomy: ICU, maternity, emergency, oncology, trauma, NICU, dialysis, surgery.
+- [x] Parse claim evidence from `facility_type_id`, `specialties`, `capability`, `description`, and `doctors`.
+- [x] Score each facility-capability pair as:
   - strong evidence
   - partial evidence
   - weak or suspicious evidence
   - no claim
-- [ ] Add an API endpoint for facility capability trust signals.
-- [ ] Add a UI panel on facility cards showing evidence-attached capability claims.
+- [x] Add an API endpoint for facility capability trust signals.
+- [x] Add a UI panel on facility cards showing evidence-attached capability claims.
+- [ ] Tune taxonomy keywords against a sampled set of false positives.
+- [ ] Add capability filters to facility search once the initial scoring is reviewed.
 
 ## Use Case 2: Gap Confidence
 
@@ -59,10 +61,12 @@
 
 - [x] Run `npm run typecheck`.
 - [x] Run `npm run lint`.
+- [x] Run focused unit test for facility capability trust scoring.
 - [x] Run local API smoke checks:
   - `/api/health/states`
   - `/api/facilities/options`
   - `/api/facilities/search?q=clinic`
   - `/api/gaps/regions?level=state`
 - [x] Run local API smoke check for `/api/facilities/data-quality`.
+- [x] Run local UI smoke check for facility capability trust panel.
 - [x] Run Playwright smoke tests if the dev server and Lakebase credentials are available.

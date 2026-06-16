@@ -1,5 +1,6 @@
 import express, { Application, Request } from 'express';
 import { z } from 'zod';
+import { scoreFacilityCapabilities } from '../lib/capability-trust';
 import {
   editableFacilityFields,
   effectiveFacilitiesCte,
@@ -83,6 +84,11 @@ const normalizeEditValue = (value: string | null) => {
 
 const getActor = (req: Request) =>
   req.get('x-forwarded-user') ?? req.get('x-databricks-user') ?? req.get('x-forwarded-email') ?? 'unknown-user';
+
+const withCapabilityTrust = (row: Record<string, unknown>) => ({
+  ...row,
+  capability_trust_signals: scoreFacilityCapabilities(row),
+});
 
 export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
   appkit.server.extend((app) => {
@@ -291,10 +297,45 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
           `,
           params
         );
-        res.json(result.rows);
+        res.json(result.rows.map(withCapabilityTrust));
       } catch (err) {
         console.error('Failed to load facilities:', err);
         res.status(500).json({ error: 'Failed to load facilities' });
+      }
+    });
+
+    app.get('/api/facilities/:id/capabilities', async (req, res) => {
+      const id = z.string().trim().min(1).max(120).safeParse(req.params.id);
+      if (!id.success) {
+        res.status(400).json({ error: 'Invalid facility id' });
+        return;
+      }
+
+      try {
+        const result = await appkit.lakebase.query(
+          `
+            WITH ${enrichedFacilitiesCte}
+            SELECT ${enrichedFacilitySelect}
+            FROM effective_facilities_enriched
+            WHERE unique_id = $1
+            LIMIT 1
+          `,
+          [id.data]
+        );
+
+        const facility = result.rows[0];
+        if (!facility) {
+          res.status(404).json({ error: 'Facility not found' });
+          return;
+        }
+
+        res.json({
+          unique_id: facility.unique_id,
+          capabilities: scoreFacilityCapabilities(facility),
+        });
+      } catch (err) {
+        console.error('Failed to score facility capabilities:', err);
+        res.status(500).json({ error: 'Failed to score facility capabilities' });
       }
     });
 

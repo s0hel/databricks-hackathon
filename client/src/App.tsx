@@ -131,6 +131,23 @@ interface Facility {
   doctors: string | null;
   latitude: string | null;
   longitude: string | null;
+  capability_trust_signals?: CapabilityTrustScore[];
+}
+
+type CapabilityTrustSignal = 'strong evidence' | 'partial evidence' | 'weak or suspicious evidence' | 'no claim';
+
+interface CapabilityEvidence {
+  source: keyof Pick<Facility, 'facility_type_id' | 'specialties' | 'capability' | 'description' | 'doctors'>;
+  excerpt: string;
+  weight: number;
+}
+
+interface CapabilityTrustScore {
+  capability: string;
+  label: string;
+  signal: CapabilityTrustSignal;
+  score: number;
+  evidence: CapabilityEvidence[];
 }
 
 interface FacilityAuditLog {
@@ -316,6 +333,32 @@ const parseListPreview = (value: string | null | undefined) => {
 
   return normalized.slice(0, 120);
 };
+
+const capabilitySignalRank: Record<CapabilityTrustSignal, number> = {
+  'strong evidence': 0,
+  'partial evidence': 1,
+  'weak or suspicious evidence': 2,
+  'no claim': 3,
+};
+
+const capabilitySignalTone: Record<CapabilityTrustSignal, string> = {
+  'strong evidence': 'border-emerald-700/20 bg-emerald-50 text-emerald-900',
+  'partial evidence': 'border-sky-700/20 bg-sky-50 text-sky-900',
+  'weak or suspicious evidence': 'border-amber-700/20 bg-amber-50 text-amber-950',
+  'no claim': 'border-[#0B2026]/10 bg-[#F9F7F4] text-[#0B2026]/60',
+};
+
+const sourceLabel = (source: CapabilityEvidence['source']) =>
+  ({
+    facility_type_id: 'Type',
+    specialties: 'Specialty',
+    capability: 'Capability',
+    description: 'Description',
+    doctors: 'Doctors',
+  })[source];
+
+const capabilityTrustDescription =
+  'Capability trust score is an evidence-weighted total. Capability field matches add 3 points, specialties and facility type add 2, and description or doctors add 1. The current maximum is 9 if all five fields support the same capability. Strong evidence requires a capability claim plus support, two structured sources, or 5+ points; partial evidence usually means one structured source or 3+ points; narrative-only evidence is weak.';
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -1527,10 +1570,11 @@ function HistogramMetric({
           {histogram.bins.map((count, index) => {
             const colorIndex = Math.min(colors.length - 1, Math.floor((index / histogram.bins.length) * colors.length));
             const height = Math.max(4, (count / histogram.maxCount) * 78);
+            const binStart = histogram.domainMin + ((histogram.domainMax - histogram.domainMin) * index) / histogram.bins.length;
 
             return (
               <div
-                key={`${label}-${index}`}
+                key={`${label}-${binStart.toFixed(3)}`}
                 className="min-w-0 flex-1 rounded-t-sm"
                 style={{
                   height,
@@ -1964,6 +2008,14 @@ function FacilityCard({ facility, onSaved }: { facility: Facility; onSaved: (fac
   const state = normalizeText(facility.address_state_or_region);
   const website = normalizeText(facility.official_website, '');
   const phone = normalizeText(facility.official_phone, '');
+  const capabilitySignals = useMemo(
+    () =>
+      [...(facility.capability_trust_signals ?? [])].sort((a, b) => {
+        const signalRank = capabilitySignalRank[a.signal] - capabilitySignalRank[b.signal];
+        return signalRank !== 0 ? signalRank : b.score - a.score;
+      }),
+    [facility.capability_trust_signals]
+  );
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<FacilityEditForm>(() => buildFacilityForm(facility));
   const [saving, setSaving] = useState(false);
@@ -2168,6 +2220,8 @@ function FacilityCard({ facility, onSaved }: { facility: Facility; onSaved: (fac
                   <MetaLine icon={<Globe className="h-4 w-4" />} text={website || 'No website listed'} />
                   <MetaLine icon={<Stethoscope className="h-4 w-4" />} text={parseListPreview(facility.specialties)} />
                 </div>
+
+                <CapabilityTrustPanel signals={capabilitySignals} />
               </>
             )}
           </div>
@@ -2219,6 +2273,65 @@ function FacilityCard({ facility, onSaved }: { facility: Facility; onSaved: (fac
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function CapabilityTrustPanel({ signals }: { signals: CapabilityTrustScore[] }) {
+  const claimedSignals = signals.filter((signal) => signal.signal !== 'no claim');
+  const noClaimCount = signals.length - claimedSignals.length;
+  const visibleSignals = claimedSignals.slice(0, 4);
+
+  return (
+    <div className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <ShieldCheck className="h-4 w-4 text-[#FF3621]" />
+          Capability trust
+        </div>
+        <span className="text-xs text-[#0B2026]/55">
+          {claimedSignals.length > 0
+            ? `${formatCount(claimedSignals.length)} evidence-bearing claims`
+            : 'No evidence-bearing claims'}
+        </span>
+      </div>
+
+      <div className="grid gap-2 xl:grid-cols-2">
+        {visibleSignals.map((signal) => (
+          <div key={signal.capability} className={`rounded-md border px-3 py-2 ${capabilitySignalTone[signal.signal]}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">{signal.label}</div>
+                <div className="mt-0.5 text-xs capitalize opacity-80">{signal.signal}</div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1 text-xs font-semibold">
+                <span>Score {formatScore(signal.score)}</span>
+                <MetricInfo label={`${signal.label} capability trust score`} description={capabilityTrustDescription} />
+              </div>
+            </div>
+            <div className="mt-2 space-y-1.5 text-xs leading-5">
+              {signal.evidence.slice(0, 2).map((evidence) => (
+                <div key={`${signal.capability}-${evidence.source}-${evidence.excerpt}`} className="text-current/80">
+                  <span className="font-semibold">{sourceLabel(evidence.source)}:</span> {evidence.excerpt}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {visibleSignals.length === 0 && (
+          <div className="rounded-md border border-[#0B2026]/10 bg-white px-3 py-2 text-sm text-[#0B2026]/60">
+            No ICU, maternity, emergency, oncology, trauma, NICU, dialysis, or surgery evidence was found in the
+            current facility fields.
+          </div>
+        )}
+      </div>
+
+      {noClaimCount > 0 && (
+        <div className="mt-2 text-xs text-[#0B2026]/55">
+          {formatCount(noClaimCount)} taxonomy capabilities have no claim in the available fields.
+        </div>
+      )}
+    </div>
   );
 }
 
