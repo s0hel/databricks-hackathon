@@ -134,6 +134,30 @@ interface Facility {
   capability_trust_signals?: CapabilityTrustScore[];
 }
 
+interface FacilityShortlistItem extends Facility {
+  distance_km: number | null;
+  matched_capability: CapabilityTrustScore | null;
+  shortlist_score: number;
+}
+
+interface FacilityShortlistResult {
+  parsed_query: {
+    raw_query: string;
+    care_need: string;
+    location: string;
+    capability: string | null;
+    capability_label: string | null;
+  };
+  origin: {
+    label: string | null;
+    district: string | null;
+    state_name: string | null;
+    latitude: number | null;
+    longitude: number | null;
+  };
+  facilities: FacilityShortlistItem[];
+}
+
 type CapabilityTrustSignal = 'strong evidence' | 'partial evidence' | 'weak or suspicious evidence' | 'no claim';
 
 interface CapabilityEvidence {
@@ -242,6 +266,17 @@ const sortOptions = [
 type ActiveTab = 'gaps' | 'health' | 'facilities' | 'genie';
 type ScoreMetricLabel = 'Gap score' | 'Need' | 'Supply adequacy' | 'Access pressure' | 'Confidence';
 type MapMetric = 'gap' | 'need';
+
+const capabilityOptions = [
+  { value: 'icu', label: 'ICU' },
+  { value: 'maternity', label: 'Maternity' },
+  { value: 'emergency', label: 'Emergency' },
+  { value: 'oncology', label: 'Oncology' },
+  { value: 'trauma', label: 'Trauma' },
+  { value: 'nicu', label: 'NICU' },
+  { value: 'dialysis', label: 'Dialysis' },
+  { value: 'surgery', label: 'Surgery' },
+];
 
 const metricDescriptions: Record<ScoreMetricLabel, string> = {
   'Gap score':
@@ -460,10 +495,16 @@ export default function App() {
   const [facilityQuery, setFacilityQuery] = useState('');
   const [facilityState, setFacilityState] = useState('');
   const [facilityType, setFacilityType] = useState('');
+  const [facilityCapability, setFacilityCapability] = useState('');
   const [, setFacilityLoading] = useState(false);
   const [facilityDataQualityLoading, setFacilityDataQualityLoading] = useState(false);
   const [facilitiesLoading, setFacilitiesLoading] = useState(false);
   const [facilityError, setFacilityError] = useState<string | null>(null);
+  const [shortlistQuery, setShortlistQuery] = useState('dialysis near Jaipur');
+  const [shortlistCapability, setShortlistCapability] = useState('');
+  const [shortlistResult, setShortlistResult] = useState<FacilityShortlistResult | null>(null);
+  const [shortlistLoading, setShortlistLoading] = useState(false);
+  const [shortlistError, setShortlistError] = useState<string | null>(null);
   const [editRevision, setEditRevision] = useState(0);
 
   useEffect(() => {
@@ -567,6 +608,7 @@ export default function App() {
     if (facilityQuery.trim()) params.set('q', facilityQuery.trim());
     if (facilityState) params.set('state', facilityState);
     if (facilityType) params.set('type', facilityType);
+    if (facilityCapability) params.set('capability', facilityCapability);
 
     async function loadFacilities() {
       setFacilitiesLoading(true);
@@ -586,7 +628,7 @@ export default function App() {
     void loadFacilities();
 
     return () => controller.abort();
-  }, [activeTab, editRevision, facilityQuery, facilityState, facilityType]);
+  }, [activeTab, editRevision, facilityCapability, facilityQuery, facilityState, facilityType]);
 
   const selectedStateCount = useMemo(() => {
     if (!state) return states.reduce((sum, item) => sum + Number(item.district_count), 0);
@@ -634,6 +676,24 @@ export default function App() {
       current.map((facility) => (facility.unique_id === updatedFacility.unique_id ? updatedFacility : facility))
     );
     setEditRevision((revision) => revision + 1);
+  };
+
+  const loadShortlist = async () => {
+    const trimmedQuery = shortlistQuery.trim();
+    if (!trimmedQuery) return;
+
+    setShortlistLoading(true);
+    setShortlistError(null);
+    try {
+      const params = new URLSearchParams({ q: trimmedQuery });
+      if (shortlistCapability) params.set('capability', shortlistCapability);
+      const result = await fetchJson<FacilityShortlistResult>(`/api/facilities/shortlist?${params.toString()}`);
+      setShortlistResult(result);
+    } catch (err) {
+      setShortlistError(err instanceof Error ? err.message : 'Failed to load shortlist');
+    } finally {
+      setShortlistLoading(false);
+    }
   };
 
   return (
@@ -1085,6 +1145,22 @@ export default function App() {
                     </select>
                   </label>
 
+                  <label className="block space-y-2 text-sm font-medium">
+                    <span>Capability evidence</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={facilityCapability}
+                      onChange={(event) => setFacilityCapability(event.target.value)}
+                    >
+                      <option value="">Any capability</option>
+                      {capabilityOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
                   <Button
                     type="button"
                     variant="outline"
@@ -1093,6 +1169,7 @@ export default function App() {
                       setFacilityQuery('');
                       setFacilityState('');
                       setFacilityType('');
+                      setFacilityCapability('');
                     }}
                   >
                     Reset facility filters
@@ -1126,6 +1203,17 @@ export default function App() {
               </div>
 
               <FacilityDataQualityPanel diagnostics={facilityDataQuality} loading={facilityDataQualityLoading} />
+
+              <PatientShortlistPanel
+                query={shortlistQuery}
+                result={shortlistResult}
+                loading={shortlistLoading}
+                error={shortlistError}
+                onQueryChange={setShortlistQuery}
+                capability={shortlistCapability}
+                onCapabilityChange={setShortlistCapability}
+                onSubmit={() => void loadShortlist()}
+              />
 
               {facilitiesLoading ? (
                 <div className="grid gap-3">
@@ -1847,6 +1935,177 @@ function ScoreBar({
       </div>
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#0B2026]/10">
         <div className={`h-full rounded-full ${toneClass}`} style={{ width }} />
+      </div>
+    </div>
+  );
+}
+
+function PatientShortlistPanel({
+  query,
+  result,
+  loading,
+  error,
+  capability,
+  onQueryChange,
+  onCapabilityChange,
+  onSubmit,
+}: {
+  query: string;
+  result: FacilityShortlistResult | null;
+  loading: boolean;
+  error: string | null;
+  capability: string;
+  onQueryChange: (value: string) => void;
+  onCapabilityChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  const parsed = result?.parsed_query;
+  const origin = result?.origin;
+
+  return (
+    <Card className="rounded-md border-[#0B2026]/10 bg-white shadow-sm">
+      <CardContent className="space-y-4 p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <MapPin className="h-4 w-4 text-[#FF3621]" />
+              Patient shortlist
+            </div>
+            <p className="mt-1 text-sm leading-6 text-[#0B2026]/65">
+              Enter a care need and place to rank nearby facilities by distance, capability trust, contactability, and
+              data completeness.
+            </p>
+          </div>
+          <div className="grid min-w-0 gap-2 sm:min-w-[520px] sm:grid-cols-[1fr_180px_auto]">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#0B2026]/45" />
+              <Input
+                className="pl-9"
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') onSubmit();
+                }}
+                placeholder="dialysis near Jaipur"
+              />
+            </div>
+            <select
+              aria-label="Shortlist capability"
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              value={capability}
+              onChange={(event) => onCapabilityChange(event.target.value)}
+            >
+              <option value="">Parse need</option>
+              {capabilityOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <Button type="button" className="h-10 gap-2" disabled={loading || !query.trim()} onClick={onSubmit}>
+              <Search className="h-4 w-4" />
+              Search
+            </Button>
+          </div>
+        </div>
+
+        {error && <InlineError message={error} />}
+
+        {loading ? (
+          <div className="grid gap-3 lg:grid-cols-3">
+            <Skeleton className="h-44 rounded-md" />
+            <Skeleton className="h-44 rounded-md" />
+            <Skeleton className="h-44 rounded-md" />
+          </div>
+        ) : result ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-[#0B2026]/60">
+              <Badge>{parsed?.capability_label ?? 'Any capability'}</Badge>
+              <Badge>{parsed?.location ? `Near ${parsed.location}` : 'No location parsed'}</Badge>
+              <Badge>
+                Origin{' '}
+                {origin?.district || origin?.state_name
+                  ? [origin.district, origin.state_name].filter(Boolean).join(', ')
+                  : 'not resolved'}
+              </Badge>
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-3">
+              {result.facilities.map((facility) => (
+                <ShortlistFacilityCard key={facility.unique_id} facility={facility} />
+              ))}
+            </div>
+
+            {result.facilities.length === 0 && (
+              <div className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-5 text-center text-sm text-[#0B2026]/65">
+                No facilities had evidence for the parsed care need near this location.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-4 text-sm text-[#0B2026]/65">
+            Try examples like dialysis near Jaipur, emergency surgery near Patna, or maternity near Ajmer.
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ShortlistFacilityCard({ facility }: { facility: FacilityShortlistItem }) {
+  const matched = facility.matched_capability;
+  const evidence = matched?.evidence.slice(0, 2) ?? [];
+
+  return (
+    <div className="rounded-md border border-[#0B2026]/10 bg-[#F9F7F4] p-4 text-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="line-clamp-2 font-semibold leading-5">{facility.name}</h3>
+          <div className="mt-1 text-xs text-[#0B2026]/60">
+            {[facility.address_city, facility.address_state_or_region].filter(Boolean).join(', ') || 'Location n/a'}
+          </div>
+        </div>
+        <div className="shrink-0 rounded-md bg-[#0B2026] px-2.5 py-1 text-xs font-semibold text-white">
+          {formatScore(facility.shortlist_score)}
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <MiniStat label="Distance" value={formatKm(facility.distance_km)} />
+        <MiniStat label="Type" value={formatToken(facility.facility_type_id)} />
+      </div>
+
+      {matched && (
+        <div className={`mt-3 rounded-md border px-3 py-2 ${capabilitySignalTone[matched.signal]}`}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold">{matched.label}</span>
+            <span className="text-xs">{matched.signal}</span>
+          </div>
+          {evidence.length > 0 && (
+            <div className="mt-2 space-y-1 text-xs leading-5 opacity-85">
+              {evidence.map((item) => (
+                <div key={`${facility.unique_id}-${item.source}-${item.excerpt}`}>
+                  {sourceLabel(item.source)}: {item.excerpt}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+        {facility.official_phone && facility.official_phone !== 'null' && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1">
+            <Phone className="h-3 w-3" />
+            Phone
+          </span>
+        )}
+        {facility.official_website && facility.official_website !== 'null' && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1">
+            <Globe className="h-3 w-3" />
+            Website
+          </span>
+        )}
       </div>
     </div>
   );

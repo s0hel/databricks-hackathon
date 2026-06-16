@@ -40,7 +40,7 @@
 - [x] Add an API endpoint for facility capability trust signals.
 - [x] Add a UI panel on facility cards showing evidence-attached capability claims.
 - [ ] Tune taxonomy keywords against a sampled set of false positives.
-- [ ] Add capability filters to facility search once the initial scoring is reviewed.
+- [x] Add capability filters to facility search once the initial scoring is reviewed.
 
 ## Use Case 2: Gap Confidence
 
@@ -51,11 +51,13 @@
 
 ## Use Case 3: Patient or Coordinator Shortlist
 
-- [ ] Add location and care need search input, for examples like `dialysis near Jaipur` or `emergency surgery near Patna`.
-- [ ] Parse care need into the capability taxonomy from use case 1.
-- [ ] Resolve entered location to candidate district/city/pincode coordinates.
-- [ ] Rank nearby facilities by distance, capability trust, contactability, and data completeness.
-- [ ] Return an evidence-attached shortlist of candidate facilities.
+- [x] Add location and care need search input, for examples like `dialysis near Jaipur` or `emergency surgery near Patna`.
+- [x] Parse care need into the capability taxonomy from use case 1.
+- [x] Resolve entered location to candidate district/city/pincode coordinates.
+- [x] Rank nearby facilities by distance, capability trust, contactability, and data completeness.
+- [x] Return an evidence-attached shortlist of candidate facilities.
+- [ ] Tune shortlist ranking after reviewing sampled results across multiple cities and care needs.
+- [x] Add explicit care-need/capability selector if free-text parsing misses common coordinator phrasing.
 
 ## Verification Checklist
 
@@ -70,4 +72,5 @@
 - [x] Run local API smoke check for `/api/facilities/data-quality`.
 - [x] Run local UI smoke check for facility capability trust panel.
 - [x] Run local API smoke check for `/api/gaps/regions` confidence factors.
+- [x] Run local API smoke check for `/api/facilities/shortlist?q=dialysis%20near%20Jaipur`.
 - [x] Run Playwright smoke tests if the dev server and Lakebase credentials are available.

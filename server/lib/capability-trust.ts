@@ -38,6 +38,7 @@ interface CapabilityDefinition {
   id: CapabilityId;
   label: string;
   patterns: RegExp[];
+  searchTerms: string[];
 }
 
 const definitions: CapabilityDefinition[] = [
@@ -45,41 +46,49 @@ const definitions: CapabilityDefinition[] = [
     id: 'icu',
     label: 'ICU',
     patterns: [/\bicu\b/i, /\bintensive care\b/i, /\bcritical care\b/i],
+    searchTerms: ['icu', 'intensive care', 'critical care'],
   },
   {
     id: 'maternity',
     label: 'Maternity',
     patterns: [/\bmaternity\b/i, /\bobstetric/i, /\bobgyn\b/i, /\bgynaec/i, /\bgynec/i, /\bdelivery\b/i],
+    searchTerms: ['maternity', 'obstetric', 'obgyn', 'gynaec', 'gynec', 'delivery'],
   },
   {
     id: 'emergency',
     label: 'Emergency',
     patterns: [/\bemergency\b/i, /\ber\b/i, /\bcasualty\b/i, /\btrauma emergency\b/i],
+    searchTerms: ['emergency', 'casualty', 'trauma emergency'],
   },
   {
     id: 'oncology',
     label: 'Oncology',
     patterns: [/\boncology\b/i, /\bcancer\b/i, /\bchemotherapy\b/i, /\bradiation therapy\b/i],
+    searchTerms: ['oncology', 'cancer', 'chemotherapy', 'radiation therapy'],
   },
   {
     id: 'trauma',
     label: 'Trauma',
     patterns: [/\btrauma\b/i, /\baccident\b/i, /\borthopaedic trauma\b/i, /\bemergency surgery\b/i],
+    searchTerms: ['trauma', 'accident', 'orthopaedic trauma', 'emergency surgery'],
   },
   {
     id: 'nicu',
     label: 'NICU',
     patterns: [/\bnicu\b/i, /\bneonatal intensive care\b/i, /\bneonatal icu\b/i],
+    searchTerms: ['nicu', 'neonatal intensive care', 'neonatal icu'],
   },
   {
     id: 'dialysis',
     label: 'Dialysis',
     patterns: [/\bdialysis\b/i, /\bhemodialysis\b/i, /\bhaemodialysis\b/i, /\bnephrology\b/i],
+    searchTerms: ['dialysis', 'hemodialysis', 'haemodialysis', 'nephrology'],
   },
   {
     id: 'surgery',
     label: 'Surgery',
     patterns: [/\bsurgery\b/i, /\bsurgical\b/i, /\boperation theatre\b/i, /\bot\b/i, /\blaparoscopy\b/i],
+    searchTerms: ['surgery', 'surgical', 'operation theatre', 'laparoscopy'],
   },
 ];
 
@@ -167,3 +176,17 @@ export const scoreFacilityCapabilities = (facility: FacilityClaimInput): Capabil
       evidence,
     };
   });
+
+export const getCapabilitySearchTerms = (capability: CapabilityId) =>
+  definitions.find((definition) => definition.id === capability)?.searchTerms ?? [];
+
+export const inferCapabilityFromText = (text: string): CapabilityId | null => {
+  const normalized = text.trim();
+  if (!normalized) return null;
+
+  const match = definitions.find((definition) => definition.patterns.some((pattern) => pattern.test(normalized)));
+  return match?.id ?? null;
+};
+
+export const getCapabilityLabel = (capability: CapabilityId) =>
+  definitions.find((definition) => definition.id === capability)?.label ?? capability;

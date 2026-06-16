@@ -1,6 +1,13 @@
 import express, { Application, Request } from 'express';
 import { z } from 'zod';
-import { scoreFacilityCapabilities } from '../lib/capability-trust';
+import {
+  CapabilityId,
+  capabilityTaxonomy,
+  getCapabilityLabel,
+  getCapabilitySearchTerms,
+  inferCapabilityFromText,
+  scoreFacilityCapabilities,
+} from '../lib/capability-trust';
 import {
   editableFacilityFields,
   effectiveFacilitiesCte,
@@ -21,6 +28,12 @@ const FacilityQuery = z.object({
   q: z.string().trim().max(120).optional().default(''),
   state: z.string().trim().max(120).optional().default(''),
   type: z.string().trim().max(80).optional().default(''),
+  capability: z.enum(capabilityTaxonomy).optional(),
+});
+
+const ShortlistQuery = z.object({
+  q: z.string().trim().min(1).max(180),
+  capability: z.enum(capabilityTaxonomy).optional(),
 });
 
 const NullableText = z.string().trim().max(8000).nullable();
@@ -59,6 +72,12 @@ const facilitySelect = `
   longitude
 `;
 
+const coordinateColumn = (column: string) => `
+  CASE
+    WHEN NULLIF(${column}::text, 'null') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${column}::text::float
+  END
+`;
+
 const enrichedFacilitySelect = `
   unique_id,
   name,
@@ -76,6 +95,23 @@ const enrichedFacilitySelect = `
   longitude
 `;
 
+const shortlistFacilitySelect = `
+  ef.unique_id,
+  ef.name,
+  ef.description,
+  ef.facility_type_id,
+  ef.operator_type_id,
+  COALESCE(ef.normalized_district_name, ef.address_city) AS address_city,
+  COALESCE(ef.normalized_state_name, ef.address_state_or_region) AS address_state_or_region,
+  ef.official_phone,
+  ef.official_website,
+  ef.specialties,
+  ef.capability,
+  ef.doctors,
+  ef.latitude,
+  ef.longitude
+`;
+
 const normalizeEditValue = (value: string | null) => {
   if (value === null) return null;
   const trimmed = value.trim();
@@ -89,6 +125,51 @@ const withCapabilityTrust = (row: Record<string, unknown>) => ({
   ...row,
   capability_trust_signals: scoreFacilityCapabilities(row),
 });
+
+const parseShortlistQuery = (rawQuery: string, requestedCapability?: CapabilityId) => {
+  const normalized = rawQuery.replace(/\s+/g, ' ').trim();
+  const nearMatch = normalized.match(/^(.+?)\s+(?:near|in|around|at)\s+(.+)$/i);
+  const careNeed = (nearMatch ? nearMatch[1] : normalized).trim();
+  const location = (nearMatch ? nearMatch[2] : '').trim();
+  const capability = requestedCapability ?? inferCapabilityFromText(careNeed);
+
+  return {
+    raw_query: normalized,
+    care_need: careNeed,
+    location,
+    capability,
+    capability_label: capability ? getCapabilityLabel(capability) : null,
+  };
+};
+
+const trustRank: Record<string, number> = {
+  'strong evidence': 40,
+  'partial evidence': 26,
+  'weak or suspicious evidence': 10,
+  'no claim': 0,
+};
+
+const scoreShortlistFacility = (row: Record<string, unknown>, capability: CapabilityId | null) => {
+  const capabilitySignals = scoreFacilityCapabilities(row);
+  const selectedSignal = capability
+    ? capabilitySignals.find((signal) => signal.capability === capability)
+    : [...capabilitySignals].sort((a, b) => b.score - a.score)[0];
+  const distanceKm = typeof row.distance_km === 'number' ? row.distance_km : Number(row.distance_km);
+  const distanceScore = Number.isFinite(distanceKm) ? Math.max(0, 35 - Math.min(distanceKm, 175) / 5) : 8;
+  const contactScore = row.official_phone || row.official_website ? 12 : 0;
+  const completenessScore = [row.description, row.specialties, row.capability, row.latitude, row.longitude].filter(
+    Boolean
+  ).length;
+  const capabilityScore = selectedSignal ? trustRank[selectedSignal.signal] + selectedSignal.score * 2 : 0;
+
+  return {
+    ...row,
+    distance_km: Number.isFinite(distanceKm) ? Math.round(distanceKm * 10) / 10 : null,
+    capability_trust_signals: capabilitySignals,
+    matched_capability: selectedSignal ?? null,
+    shortlist_score: Math.round((capabilityScore + distanceScore + contactScore + completenessScore) * 10) / 10,
+  };
+};
 
 export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
   appkit.server.extend((app) => {
@@ -253,7 +334,7 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
 
       const filters: string[] = [];
       const params: string[] = [];
-      const { q, state, type } = parsed.data;
+      const { q, state, type, capability } = parsed.data;
 
       if (q) {
         params.push(`%${q}%`);
@@ -280,6 +361,21 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
         filters.push(`NULLIF(facility_type_id, 'null') = $${params.length}`);
       }
 
+      if (capability) {
+        const capabilityFilters = getCapabilitySearchTerms(capability).map((term) => {
+          params.push(`%${term}%`);
+          const paramIndex = params.length;
+          return `
+            COALESCE(facility_type_id, '') ILIKE $${paramIndex}
+            OR COALESCE(specialties, '') ILIKE $${paramIndex}
+            OR COALESCE(capability, '') ILIKE $${paramIndex}
+            OR COALESCE(description, '') ILIKE $${paramIndex}
+            OR COALESCE(doctors, '') ILIKE $${paramIndex}
+          `;
+        });
+        filters.push(`(${capabilityFilters.map((filter) => `(${filter})`).join(' OR ')})`);
+      }
+
       const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
 
       try {
@@ -297,10 +393,162 @@ export function setupFacilityRoutes(appkit: AppKitWithLakebase) {
           `,
           params
         );
-        res.json(result.rows.map(withCapabilityTrust));
+        const rows = result.rows
+          .map(withCapabilityTrust)
+          .filter(
+            (row) =>
+              !capability ||
+              row.capability_trust_signals.find((signal) => signal.capability === capability)?.signal !== 'no claim'
+          );
+        res.json(rows);
       } catch (err) {
         console.error('Failed to load facilities:', err);
         res.status(500).json({ error: 'Failed to load facilities' });
+      }
+    });
+
+    app.get('/api/facilities/shortlist', async (req, res) => {
+      const parsed = ShortlistQuery.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid shortlist query' });
+        return;
+      }
+
+      const shortlistQuery = parseShortlistQuery(parsed.data.q, parsed.data.capability);
+      const params: unknown[] = [shortlistQuery.location, `%${shortlistQuery.location}%`];
+      const filters: string[] = ['latitude_num BETWEEN 6 AND 38', 'longitude_num BETWEEN 68 AND 98'];
+
+      if (shortlistQuery.location) {
+        filters.push(`
+          (
+            origin_latitude IS NULL
+            OR distance_km <= 300
+            OR normalized_district_name ILIKE $2
+            OR normalized_state_name ILIKE $2
+            OR address_city ILIKE $2
+          )
+        `);
+      }
+
+      if (shortlistQuery.capability) {
+        const capabilityFilters = getCapabilitySearchTerms(shortlistQuery.capability).map((term) => {
+          params.push(`%${term}%`);
+          const paramIndex = params.length;
+          return `
+            COALESCE(facility_type_id, '') ILIKE $${paramIndex}
+            OR COALESCE(specialties, '') ILIKE $${paramIndex}
+            OR COALESCE(capability, '') ILIKE $${paramIndex}
+            OR COALESCE(description, '') ILIKE $${paramIndex}
+            OR COALESCE(doctors, '') ILIKE $${paramIndex}
+          `;
+        });
+        filters.push(`(${capabilityFilters.map((filter) => `(${filter})`).join(' OR ')})`);
+      }
+
+      const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+
+      try {
+        const result = await appkit.lakebase.query(
+          `
+            WITH ${enrichedFacilitiesCte},
+            location_matches AS (
+              SELECT
+                COALESCE(NULLIF(officename, 'null'), NULLIF(district, 'null'), NULLIF(statename, 'null')) AS label,
+                NULLIF(district, 'null') AS district,
+                NULLIF(statename, 'null') AS state_name,
+                ${coordinateColumn('latitude')} AS latitude_num,
+                ${coordinateColumn('longitude')} AS longitude_num,
+                CASE
+                  WHEN pincode::text = $1 THEN 0
+                  WHEN COALESCE(district, '') ILIKE $2 THEN 1
+                  WHEN COALESCE(officename, '') ILIKE $2 THEN 2
+                  WHEN COALESCE(statename, '') ILIKE $2 THEN 3
+                  ELSE 4
+                END AS match_rank
+              FROM public.pincode_directory
+              WHERE $1 <> ''
+                AND ${coordinateColumn('latitude')} BETWEEN 6 AND 38
+                AND ${coordinateColumn('longitude')} BETWEEN 68 AND 98
+                AND (
+                  pincode::text = $1
+                  OR COALESCE(district, '') ILIKE $2
+                  OR COALESCE(officename, '') ILIKE $2
+                  OR COALESCE(statename, '') ILIKE $2
+                )
+              ORDER BY match_rank, district, officename
+              LIMIT 60
+            ),
+            origin AS (
+              SELECT
+                AVG(latitude_num)::float AS latitude,
+                AVG(longitude_num)::float AS longitude,
+                MIN(label) AS label,
+                MIN(district) AS district,
+                MIN(state_name) AS state_name
+              FROM location_matches
+            ),
+            candidate_facilities AS (
+              SELECT
+                ${shortlistFacilitySelect},
+                ef.normalized_state_name,
+                ef.normalized_district_name,
+                ef.geography_quality,
+                ${coordinateColumn('ef.latitude')} AS latitude_num,
+                ${coordinateColumn('ef.longitude')} AS longitude_num,
+                origin.latitude AS origin_latitude,
+                origin.longitude AS origin_longitude,
+                origin.label AS origin_label,
+                origin.district AS origin_district,
+                origin.state_name AS origin_state,
+                CASE
+                  WHEN origin.latitude IS NOT NULL
+                    AND origin.longitude IS NOT NULL
+                    AND ${coordinateColumn('ef.latitude')} BETWEEN 6 AND 38
+                    AND ${coordinateColumn('ef.longitude')} BETWEEN 68 AND 98
+                  THEN (
+                    6371 * 2 * ASIN(LEAST(1, SQRT(
+                      POWER(SIN(RADIANS((${coordinateColumn('ef.latitude')} - origin.latitude) / 2)), 2)
+                      + COS(RADIANS(origin.latitude))
+                      * COS(RADIANS(${coordinateColumn('ef.latitude')}))
+                      * POWER(SIN(RADIANS((${coordinateColumn('ef.longitude')} - origin.longitude) / 2)), 2)
+                    )))
+                  )::float
+                END AS distance_km
+              FROM effective_facilities_enriched ef
+              CROSS JOIN origin
+            )
+            SELECT *
+            FROM candidate_facilities
+            ${whereClause}
+            ORDER BY
+              distance_km ASC NULLS LAST,
+              CASE WHEN official_phone IS NOT NULL OR official_website IS NOT NULL THEN 0 ELSE 1 END,
+              name NULLS LAST
+            LIMIT 140
+          `,
+          params
+        );
+
+        const facilities = result.rows
+          .map((row) => scoreShortlistFacility(row, shortlistQuery.capability))
+          .filter((row) => !shortlistQuery.capability || row.matched_capability?.signal !== 'no claim')
+          .sort((a, b) => Number(b.shortlist_score) - Number(a.shortlist_score))
+          .slice(0, 12);
+
+        res.json({
+          parsed_query: shortlistQuery,
+          origin: {
+            label: result.rows[0]?.origin_label ?? null,
+            district: result.rows[0]?.origin_district ?? null,
+            state_name: result.rows[0]?.origin_state ?? null,
+            latitude: result.rows[0]?.origin_latitude ?? null,
+            longitude: result.rows[0]?.origin_longitude ?? null,
+          },
+          facilities,
+        });
+      } catch (err) {
+        console.error('Failed to load facility shortlist:', err);
+        res.status(500).json({ error: 'Failed to load facility shortlist' });
       }
     });
 

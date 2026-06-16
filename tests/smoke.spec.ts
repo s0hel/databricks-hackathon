@@ -66,6 +66,10 @@ test('smoke test - facility diagnostics loads', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: 'Facility search' })).toBeVisible();
   await expect(page.getByText('Data quality diagnostics')).toBeVisible();
+  await expect(page.getByText('Patient shortlist')).toBeVisible();
+  await expect(page.getByPlaceholder('dialysis near Jaipur')).toBeVisible();
+  await expect(page.getByLabel('Capability evidence')).toBeVisible();
+  await expect(page.getByLabel('Shortlist capability')).toBeVisible();
   await expect(page.getByText('Unmapped facility states')).toBeVisible();
   await expect(page.getByText('Missing pincode coordinates')).toBeVisible();
 });

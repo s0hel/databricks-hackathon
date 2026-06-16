@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { scoreFacilityCapabilities } from './capability-trust';
+import { inferCapabilityFromText, scoreFacilityCapabilities } from './capability-trust';
 
 const signalFor = (facility: Parameters<typeof scoreFacilityCapabilities>[0], capability: string) => {
   const score = scoreFacilityCapabilities(facility).find((item) => item.capability === capability);
@@ -47,5 +47,13 @@ describe('scoreFacilityCapabilities', () => {
 
     expect(oncology.signal).toBe('no claim');
     expect(oncology.evidence).toEqual([]);
+  });
+});
+
+describe('inferCapabilityFromText', () => {
+  it('maps coordinator care needs to the shared capability taxonomy', () => {
+    expect(inferCapabilityFromText('dialysis near Jaipur')).toBe('dialysis');
+    expect(inferCapabilityFromText('oncology consultation')).toBe('oncology');
+    expect(inferCapabilityFromText('general checkup')).toBeNull();
   });
 });
